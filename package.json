@@ -1,0 +1,179 @@
+{
+  "name": "manim-viewer",
+  "displayName": "Manim Viewer",
+  "description": "Live preview for manim scenes",
+  "version": "1.0.0",
+  "publisher": "marcel-goldschen-ohm",
+  "repository": {
+    "url": "https://github.com/marcel-goldschen-ohm/manim-viewer",
+    "type": "git",
+    "directory": "src"
+  },
+  "author": {
+    "name": "Marcel Goldschen-Ohm",
+    "url": "https://github.com/marcel-goldschen-ohm"
+  },
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "manim",
+    "animations",
+    "manim viewer"
+  ],
+  "activationEvents": [
+    "onLanguage:python"
+  ],
+  "extensionDependencies": [
+    "ms-python.python"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Manim Viewer",
+      "properties": {
+        "manimViewer.renderQuality": {
+          "type": "string",
+          "enum": [
+            "480p15",
+            "720p30",
+            "1080p60",
+            "1440p60",
+            "2160p60"
+          ],
+          "enumDescriptions": [
+            "854x480 15FPS (low)",
+            "1280x720 30FPS (medium)",
+            "1920x1080 60FPS (high)",
+            "2560x1440 60FPS (2K)",
+            "3840x2160 60FPS (4K)"
+          ],
+          "enumItemLabels": [
+            "low",
+            "medium",
+            "high",
+            "2K",
+            "4K"
+          ],
+          "default": "480p15"
+        }
+      }
+    },
+    "views": {
+      "explorer": [
+        {
+          "id": "manimOutline",
+          "name": "Manim Outline",
+          "when": "manimOutlineEnabled"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "manimViewer.settings",
+        "title": "Settings",
+        "category": "Manim Viewer",
+        "icon": {
+          "light": "resources/light/gear.svg",
+          "dark": "resources/dark/gear.svg"
+        }
+      },
+      {
+        "command": "manimViewer.refresh",
+        "title": "Refresh",
+        "category": "Manim Viewer",
+        "icon": {
+          "light": "resources/light/refresh.svg",
+          "dark": "resources/dark/refresh.svg"
+        }
+      },
+      {
+        "command": "manimViewer.collapseAll",
+        "title": "Collapse All",
+        "category": "Manim Viewer",
+        "icon": {
+          "light": "resources/light/collapse-all.svg",
+          "dark": "resources/dark/collapse-all.svg"
+        }
+      },
+      {
+        "command": "manimViewer.showViewer",
+        "title": "Show Viewer",
+        "category": "Manim Viewer",
+        "icon": {
+          "light": "resources/light/device-camera-video.svg",
+          "dark": "resources/dark/device-camera-video.svg"
+        }
+      },
+      {
+        "command": "manimViewer.renderScene",
+        "title": "Render Scene",
+        "category": "Manim Viewer",
+        "icon": {
+          "light": "resources/light/device-camera-video.svg",
+          "dark": "resources/dark/device-camera-video.svg"
+        }
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "manimViewer.showViewer",
+          "when": "view == manimOutline",
+          "group": "navigation@0"
+        },
+        {
+          "command": "manimViewer.settings",
+          "when": "view == manimOutline",
+          "group": "navigation@1"
+        },
+        {
+          "command": "manimViewer.refresh",
+          "when": "view == manimOutline",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "manimViewer.renderScene",
+          "when": "view == manimOutline"
+        }
+      ]
+    },
+    "languages": [
+      {
+        "id": "python",
+        "extensions": [
+          ".py"
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.9",
+    "@types/node": "20.x",
+    "@types/vscode": "^1.95.0",
+    "@typescript-eslint/eslint-plugin": "^8.10.0",
+    "@typescript-eslint/parser": "^8.7.0",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.4.1",
+    "eslint": "^9.13.0",
+    "typescript": "^5.6.3"
+  },
+  "dependencies": {
+    "@vscode/python-extension": "^1.0.5"
+  }
+}
