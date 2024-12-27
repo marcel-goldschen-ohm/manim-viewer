@@ -115,7 +115,7 @@ class ManimOutlineProvider implements vscode.TreeDataProvider<ManimOutlineTreeIt
 	private _videoUri: vscode.Uri | undefined;
 
 	private _sceneTreeItems: ManimOutlineTreeItem[] = [];
-	private _sceneIconPath = {
+	private _sceneIconPath: any = {
 		light: path.join(__filename, '..', '..', 'resources', 'light', 'symbol-interface.svg'),
 		dark: path.join(__filename, '..', '..', 'resources', 'dark', 'symbol-interface.svg')
 	};
@@ -720,7 +720,7 @@ class ManimOutlineTreeItem extends vscode.TreeItem {
 	endLine: number | undefined;
 	code: string | undefined;
 
-	constructor(label: string, iconPath?: { light: string; dark: string; }) {
+	constructor(label: string, iconPath?: any) {
 		const collapsibleState = vscode.TreeItemCollapsibleState.None;
 		super(label, collapsibleState);
 		if (iconPath !== undefined) {

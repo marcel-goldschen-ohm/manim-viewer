@@ -437,7 +437,7 @@ class ManimOutlineProvider {
     }
     _getQuality() {
         const settings = vscode.workspace.getConfiguration('Manim Viewer');
-        const quality = settings?.get('render.quality') || '480p15';
+        const quality = settings?.get('manimViewer.renderQuality') || '480p15';
         return quality;
     }
     _onActiveTextEditorChanged() {
