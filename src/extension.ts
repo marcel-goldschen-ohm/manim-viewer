@@ -15,7 +15,7 @@ export function activate(context: vscode.ExtensionContext) {
 	// Open extension settings
 	context.subscriptions.push(
 		vscode.commands.registerCommand('manimViewer.settings', () => {
-			vscode.commands.executeCommand('workbench.action.openSettings', 'Manim Viewer');
+			vscode.commands.executeCommand('workbench.action.openSettings', '@ext:marcel-goldschen-ohm.manim-viewer');
 		})
 	);
 
@@ -452,9 +452,9 @@ class ManimOutlineProvider implements vscode.TreeDataProvider<ManimOutlineTreeIt
 	}
 
 	private _getQuality(): string {
-		const settings = vscode.workspace.getConfiguration('Manim Viewer');
-		const quality = settings?.get<string>('manimViewer.renderQuality') || '480p15';
-		return quality;
+		const settings = vscode.workspace.getConfiguration('manimViewer');
+		const quality = settings?.get<string>('renderQuality');
+		return quality || '480p15';
 	}
 
 	private _onActiveTextEditorChanged() {

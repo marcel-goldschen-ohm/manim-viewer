@@ -60,7 +60,8 @@
             "2K",
             "4K"
           ],
-          "default": "480p15"
+          "default": "480p15",
+          "scope": "window"
         }
       }
     },

@@ -51,7 +51,7 @@ function activate(context) {
     // console.log('Congratulations, your extension "manim-viewer" is now active!');
     // Open extension settings
     context.subscriptions.push(vscode.commands.registerCommand('manimViewer.settings', () => {
-        vscode.commands.executeCommand('workbench.action.openSettings', 'Manim Viewer');
+        vscode.commands.executeCommand('workbench.action.openSettings', '@ext:marcel-goldschen-ohm.manim-viewer');
     }));
     // Manim outline view in explorer sidebar
     const manimOutlineProvider = new ManimOutlineProvider(context);
@@ -436,9 +436,9 @@ class ManimOutlineProvider {
         }
     }
     _getQuality() {
-        const settings = vscode.workspace.getConfiguration('Manim Viewer');
-        const quality = settings?.get('manimViewer.renderQuality') || '480p15';
-        return quality;
+        const settings = vscode.workspace.getConfiguration('manimViewer');
+        const quality = settings?.get('renderQuality');
+        return quality || '480p15';
     }
     _onActiveTextEditorChanged() {
         // console.log('editor changed');
