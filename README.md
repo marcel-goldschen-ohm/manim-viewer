@@ -1,6 +1,6 @@
 # manim-viewer
 
-Live view for cursor-selected Manim scenes.
+Live view for cursor-selected Manim scenes in Visual Studio Code.
 
 ## Features/Quickstart
 
