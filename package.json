@@ -2,7 +2,7 @@
   "name": "manim-viewer",
   "displayName": "Manim Viewer",
   "description": "Live preview for manim scenes",
-  "version": "1.0.3",
+  "version": "2.0.0",
   "publisher": "marcel-goldschen-ohm",
   "repository": {
     "url": "https://github.com/marcel-goldschen-ohm/manim-viewer",
@@ -62,21 +62,17 @@
           ],
           "default": "480p15",
           "scope": "window"
+        },
+        "manimViewer.renderOnSave": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window"
         }
       }
     },
-    "views": {
-      "explorer": [
-        {
-          "id": "manimOutline",
-          "name": "Manim Outline",
-          "when": "manimOutlineEnabled"
-        }
-      ]
-    },
     "commands": [
       {
-        "command": "manimViewer.settings",
+        "command": "manimViewer.openSettings",
         "title": "Settings",
         "category": "Manim Viewer",
         "icon": {
@@ -85,35 +81,8 @@
         }
       },
       {
-        "command": "manimViewer.refresh",
-        "title": "Refresh",
-        "category": "Manim Viewer",
-        "icon": {
-          "light": "resources/light/refresh.svg",
-          "dark": "resources/dark/refresh.svg"
-        }
-      },
-      {
-        "command": "manimViewer.collapseAll",
-        "title": "Collapse All",
-        "category": "Manim Viewer",
-        "icon": {
-          "light": "resources/light/collapse-all.svg",
-          "dark": "resources/dark/collapse-all.svg"
-        }
-      },
-      {
         "command": "manimViewer.showViewer",
-        "title": "Show Viewer",
-        "category": "Manim Viewer",
-        "icon": {
-          "light": "resources/light/device-camera-video.svg",
-          "dark": "resources/dark/device-camera-video.svg"
-        }
-      },
-      {
-        "command": "manimViewer.renderScene",
-        "title": "Render Scene",
+        "title": "Manim Viewer",
         "category": "Manim Viewer",
         "icon": {
           "light": "resources/light/device-camera-video.svg",
@@ -122,27 +91,11 @@
       }
     ],
     "menus": {
-      "view/title": [
+      "editor/title": [
         {
           "command": "manimViewer.showViewer",
-          "when": "view == manimOutline",
-          "group": "navigation@0"
-        },
-        {
-          "command": "manimViewer.settings",
-          "when": "view == manimOutline",
-          "group": "navigation@1"
-        },
-        {
-          "command": "manimViewer.refresh",
-          "when": "view == manimOutline",
-          "group": "navigation@2"
-        }
-      ],
-      "view/item/context": [
-        {
-          "command": "manimViewer.renderScene",
-          "when": "view == manimOutline"
+          "when": "editorLangId == 'python'",
+          "group": "navigation"
         }
       ]
     },

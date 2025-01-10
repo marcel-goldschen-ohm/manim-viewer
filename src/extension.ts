@@ -4,6 +4,8 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import fs from 'fs';
 
+const debugManimViewer = false;
+
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
@@ -14,35 +16,8 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Open extension settings
 	context.subscriptions.push(
-		vscode.commands.registerCommand('manimViewer.settings', () => {
+		vscode.commands.registerCommand('manimViewer.openSettings', () => {
 			vscode.commands.executeCommand('workbench.action.openSettings', '@ext:marcel-goldschen-ohm.manim-viewer');
-		})
-	);
-
-	// Manim outline view in explorer sidebar
-	const manimOutlineProvider = new ManimOutlineProvider(context);
-	context.subscriptions.push(
-		vscode.window.registerTreeDataProvider(ManimOutlineProvider.viewType, manimOutlineProvider)
-	);
-
-	// Refresh manim outline view
-	context.subscriptions.push(
-		vscode.commands.registerCommand('manimViewer.refresh', () => {
-			manimOutlineProvider.refresh();
-		})
-	);
-
-	// Select item in manim outline view
-	context.subscriptions.push(
-		vscode.commands.registerCommand("manimViewer.selectTreeItem", (item: ManimOutlineTreeItem) => {
-			manimOutlineProvider.onTreeItemSelected(item);
-		})
-	);
-
-	// Collapse all items in manim outline view
-	context.subscriptions.push(
-		vscode.commands.registerCommand('manimViewer.collapseAll', () => {
-			manimOutlineProvider.collapseAll();
 		})
 	);
 
@@ -50,17 +25,6 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		vscode.commands.registerCommand('manimViewer.showViewer', () => {
 			ManimViewerPanel.createOrShow(context.extensionUri);
-			manimOutlineProvider.refresh();
-		})
-	);
-
-	// Render scene in viewer webview panel
-	context.subscriptions.push(
-		vscode.commands.registerCommand('manimViewer.renderScene', (node?: ManimOutlineTreeItem) => {
-			if (node) {
-				ManimViewerPanel.createOrShow(context.extensionUri);
-				manimOutlineProvider.setScene(node, true);
-			}
 		})
 	);
 
@@ -80,659 +44,24 @@ export function activate(context: vscode.ExtensionContext) {
 // This method is called when your extension is deactivated
 export function deactivate() {
 	if (ManimViewerPanel.currentPanel) {
-		ManimViewerPanel.currentPanel.clearTerminal();
+		ManimViewerPanel.currentPanel.closeMainTerminal();
+		ManimViewerPanel.currentPanel.dispose();
 	}
 }
 
-// const Singleton = (function () {
-// 	let instance;
-
-// 	function createInstance() {
-// 		const object = new Object("I am the instance");
-// 		return object;
-// 	}
-
-// 	return {
-// 		getInstance: function () {
-// 			if (!instance) {
-// 				instance = createInstance();
-// 			}
-// 			return instance;
-// 		}
-// 	};
-// })();
-
-class ManimOutlineProvider implements vscode.TreeDataProvider<ManimOutlineTreeItem> {
-
-	public static readonly viewType = 'manimOutline';
-
-	private _onDidChangeTreeData: vscode.EventEmitter<ManimOutlineTreeItem | undefined | void> = new vscode.EventEmitter<ManimOutlineTreeItem | undefined | void>();
-	readonly onDidChangeTreeData: vscode.Event<ManimOutlineTreeItem | undefined | void> = this._onDidChangeTreeData.event;
-
-	private _codeEditor: vscode.TextEditor | undefined;
-	private _codeDocument: vscode.TextDocument | undefined;
-	private _sceneName: string | undefined;
-	private _videoUri: vscode.Uri | undefined;
-
-	private _sceneTreeItems: ManimOutlineTreeItem[] = [];
-	private _sceneIconPath: any = {
-		light: path.join(__filename, '..', '..', 'resources', 'light', 'symbol-interface.svg'),
-		dark: path.join(__filename, '..', '..', 'resources', 'dark', 'symbol-interface.svg')
-	};
-
-	// for debouncing async events
-	private _isHandlingDocumentSave: boolean = false;
-	private _isHandlingDocumentChange: boolean = false;
-	private _isHandlingSelectionChange: boolean = false;
-	private _documentSaveTimeout: NodeJS.Timeout | string | number | undefined;
-	private _documentChangeTimeout: NodeJS.Timeout | string | number | undefined;
-	private _selectionChangeTimeout: NodeJS.Timeout | string | number | undefined;
-
-	constructor(private context: vscode.ExtensionContext) {
-		vscode.window.onDidChangeActiveTextEditor(() => this._onActiveTextEditorChanged());
-		vscode.workspace.onDidSaveTextDocument((document) => this._onTextDocumentSaved(document));
-		vscode.workspace.onDidChangeTextDocument(event => this._onTextDocumentChanged(event));
-		vscode.window.onDidChangeTextEditorSelection((event) => this._onTextEditorSelectionChanged(event));
-		vscode.workspace.onDidDeleteFiles((event) => this._onFileDeleted(event));
-		vscode.workspace.onDidRenameFiles((event) => this._onFileRenamed(event));
-		// this.onDidChangeTreeData(() => this._onTreeDataChanged());
-
-		this._onActiveTextEditorChanged();
-	}
-
-	private _getTreeView(): vscode.TreeView<ManimOutlineTreeItem> {
-		return vscode.window.createTreeView(ManimOutlineProvider.viewType, { treeDataProvider: this });
-	}
-
-	refresh() {
-		// console.log('refresh');
-		this.setCodeDocument(this._codeDocument);
-	}
-
-	collapseAll() {
-		vscode.commands.executeCommand('workbench.actions.treeView.' + ManimOutlineProvider.viewType + '.collapseAll');
-	}
-
-	onTreeItemSelected(item: ManimOutlineTreeItem) {
-		this._setCursorPositionToScene(item);
-		this.setScene(item);
-	}
-
-	setCodeDocument(document: vscode.TextDocument | undefined) {
-		// console.log('set code document');
-		this._codeDocument = document;
-
-		// reset outline tree
-		const contents = this._codeDocument?.getText();
-		this._sceneTreeItems = contents ? this._parsePythonCodeForManimOutline(contents) : [];
-
-		let sceneTreeItem = this._getSceneTreeItemFromCursorPosition();
-		if (sceneTreeItem) {
-			this.setScene(sceneTreeItem);
-		} else {
-			// TODO: set scene based on stored state
-
-			// if not set based on stored state, clear the scene
-			this.setScene(undefined);
-		}
-
-		// update outline view title
-		this._updateTreeViewTitle();
-
-		// needed?
-		this._onDidChangeTreeData.fire();
-	}
-
-	setScene(scene: ManimOutlineTreeItem | string | undefined, forceRender: boolean = false) {
-		// console.log('set scene');
-		var sceneTreeItem: ManimOutlineTreeItem | undefined;
-		if (scene instanceof ManimOutlineTreeItem) {
-			sceneTreeItem = scene;
-			this._sceneName = sceneTreeItem.label?.toString();
-		} else {
-			this._sceneName = this._isValidSceneName(scene) ? scene : undefined;
-			sceneTreeItem = this._getSceneTreeItemFromName(this._sceneName);
-		}
-		// update tree selection
-		if (sceneTreeItem) {
-			this._getTreeView().reveal(sceneTreeItem, {select: true});
-		}
-		this._videoUri = this._getVideoUri();
-
-		if (ManimViewerPanel.currentPanel === undefined) {
-			return;
-		}
-		ManimViewerPanel.currentPanel.refresh(this._videoUri);
-
-		if (this._videoUri === undefined) {
-			return;
-		}
-		if (forceRender || !this._isExistingFile(this._videoUri?.fsPath)) {
-			this.renderScene();
-			return;
-		}
-		if (!this._isHandlingDocumentSave && (this._isHandlingDocumentChange || this._isHandlingSelectionChange)) {
-			return;
-		}
-		// check cached code to see if there is anything new to render
-		if (this._sceneName && sceneTreeItem) {
-			const videoCodeUri = this._getVideoCodeUri(this._videoUri);
-			if (videoCodeUri && this._isExistingFile(videoCodeUri.fsPath)) {
-				try {
-					const sceneCode = JSON.parse(fs.readFileSync(videoCodeUri.fsPath, 'utf8'));
-					const cachedSceneCode = sceneCode[this._sceneName];
-					const currentSceneCode = sceneTreeItem.code;
-					// console.log('Cached:\n' + cachedSceneCode);
-					// console.log('Current:\n' + currentSceneCode);
-					if (cachedSceneCode === currentSceneCode) {
-						// console.log('Scene code is already up to date');
-						return;
-					}
-				} catch (err) {
-				}
-			}
-		}
-		this.renderScene();
-	}
-
-	renderScene(sceneName?: string) {
-		if (ManimViewerPanel.currentPanel) {
-			const codeFilePath = this._codeDocument?.uri.fsPath;
-			if (sceneName === undefined) {
-				sceneName = this._sceneName;
-			}
-			if (codeFilePath && sceneName) {
-				// console.log('rendering scene');
-				const codeFileDir = path.dirname(codeFilePath);
-				const codeFileName = path.basename(codeFilePath);
-				const quality = this._getQuality();
-				const qualityFlags: { [key: string]: string } = {
-					"480p15": "l",
-					"720p30": "m",
-					"1080p60": "h",
-					"1440p60": "p",
-					"2160p60": "k"
-				};
-				const qualityFlag = qualityFlags[quality];
-				var videoFilePath = this._videoUri?.fsPath;
-				if (videoFilePath === undefined) {
-					const codeFileNameNoExt = path.basename(codeFilePath, '.py');
-					videoFilePath = path.join(codeFileDir, 'media', 'videos', codeFileNameNoExt, quality, sceneName + '.mp4');
-				}
-
-				const terminal: vscode.Terminal = ManimViewerPanel.currentPanel.getTerminal();
-				// TODO: use videoUri
-				// For now, manim's default output path should be the same as the videoUri.
-				terminal.sendText(`cd ${codeFileDir}; manim --quality=${qualityFlag} ${codeFileName} ${sceneName}`);
-
-				// store scene code for rendered video
-				const videoDir = path.dirname(videoFilePath);
-				const sceneCodeFilePath = path.join(videoDir, 'manimViewer.json');
-				var sceneCode: {[key: string]: any} = {}; // stupid typescript
-				if (this._isExistingFile(sceneCodeFilePath)) {
-					sceneCode = JSON.parse(fs.readFileSync(sceneCodeFilePath, 'utf8'));
-				}
-				// console.log(sceneCode);
-				const sceneTreeItem = this._sceneTreeItems.find(item => item.label === sceneName);
-				if (sceneTreeItem) {
-					sceneCode[sceneName] = sceneTreeItem.code;
-					fs.writeFileSync(sceneCodeFilePath, JSON.stringify(sceneCode, null, 4));
-				}
-
-				// clean up partial movie files
-				this._cleanUpPartialMovieFiles(videoDir, sceneName);
-			}
-		}
-	}
-
-	getCurrentSceneName(): string | undefined {
-		return this._sceneName;
-	}
-
-	private _getVideoUri(): vscode.Uri | undefined {
-		if (this._codeDocument === undefined || this._sceneName === undefined) {
-			return undefined;
-		}
-		const codeFilePath = this._codeDocument.uri.fsPath;
-		const codeFileDir = path.dirname(codeFilePath);
-		const codeFileName = path.basename(codeFilePath, '.py');
-		const quality = this._getQuality();
-		const videoFileDir = path.join(codeFileDir, 'media', 'videos', codeFileName, quality);
-		const videoFileName = this._sceneName + '.mp4';
-		const videoFilePath = path.join(videoFileDir, videoFileName);
-		return vscode.Uri.file(videoFilePath);
-	}
-
-	private _getVideoCodeUri(videoUri: vscode.Uri | undefined): vscode.Uri | undefined {
-		if (videoUri === undefined) {
-			return undefined;
-		}
-		const videoDir = path.dirname(videoUri.fsPath);
-		const videoCodeFilePath = path.join(videoDir, 'manimViewer.json');
-		return vscode.Uri.file(videoCodeFilePath);
-	}
-
-	private _cleanUpPartialMovieFiles(videoDir: string, sceneName: string | undefined) {
-		// console.log('clean up partial movie files');
-		let partialMovieFilesDir = path.join(videoDir, 'partial_movie_files');
-		// console.log(partialMovieFilesDir);
-		if (!this._isExistingDirectory(partialMovieFilesDir)) {
-			return;
-		}
-		const sceneDirNames = fs.readdirSync(partialMovieFilesDir);
-		// console.log(sceneDirNames);
-		for (const sceneDirName of sceneDirNames) {
-		  const sceneDir = path.join(partialMovieFilesDir, sceneDirName);
-		  const stat = fs.statSync(sceneDir);
-		  if (stat.isDirectory()) {
-			if (sceneName === undefined || sceneDirName === sceneName) {
-				var partialMovieFiles: string[] = [];
-				var listedPartialMovieFiles: string[] = [];
-				const sceneFileNames = fs.readdirSync(sceneDir);
-				// console.log(sceneFileNames);
-				for (const sceneFileName of sceneFileNames) {
-				  const sceneFilePath = path.join(sceneDir, sceneFileName);
-				  const stat = fs.statSync(sceneFilePath);
-				  if (stat.isFile()) {
-					if (sceneFileName.endsWith('.mp4')) {
-					  partialMovieFiles.push(sceneFilePath);
-					} else if (sceneFileName === 'partial_movie_file_list.txt') {
-					  const data = fs.readFileSync(sceneFilePath, 'utf8');
-					  const lines = data.split('\n');
-					  for (const line of lines) {
-						if (line.startsWith('file ')) {
-							// file 'path/to/file.mp4'
-							const listedSceneFilePath = line.substring(6, line.length - 1).trim();
-							listedPartialMovieFiles.push(listedSceneFilePath);
-						}
-					  }
-					}
-				  }
-				}
-				// console.log(partialMovieFiles);
-				// console.log(listedPartialMovieFiles);
-				// delete partial movie files that are not listed in partial_movie_file_list.txt
-				for (const partialMovieFile of partialMovieFiles) {
-				  if (!listedPartialMovieFiles.includes(partialMovieFile)) {
-					fs.unlinkSync(partialMovieFile);
-				  }
-				}
-			}
-			if (sceneDirName === sceneName) {
-				break;
-			}
-		  }
-		}
-	}
-	
-	private _isExistingFile(path: fs.PathLike | undefined): boolean {
-		if (path === undefined) {
-			return false;
-		}
-		try {
-			fs.accessSync(path);
-			return true;
-		} catch (err) {
-			return false;
-		}
-	}
-
-	private _isExistingDirectory(path: fs.PathLike | undefined): boolean {
-		if (path === undefined) {
-			return false;
-		}
-		try {
-		  return fs.statSync(path).isDirectory();
-		} catch (err) {
-		  return false;
-		}
-	  }
-
-	private _isValidCodeDocument(document: vscode.TextDocument): boolean {
-		const isFile = document.uri.scheme === 'file';
-		const isPython = document.languageId === 'python';
-		if (!isFile || !isPython) {
-			return false;
-		}
-		return this._isExistingFile(document.uri.fsPath);
-	}
-
-	private _isValidSceneName(sceneName: string | undefined): boolean {
-		if (sceneName === undefined) {
-			return false;
-		}
-		return this._sceneTreeItems.some(item => item.label === sceneName);
-	}
-
-	private _getSceneTreeItemFromName(sceneName: string | undefined): ManimOutlineTreeItem | undefined {
-		if (sceneName === undefined) {
-			return undefined;
-		}
-		return this._sceneTreeItems.find(item => item.label === sceneName);
-	}
-
-	private _setCursorPositionToScene(scene: ManimOutlineTreeItem | string | undefined) {
-		if (scene instanceof ManimOutlineTreeItem) {
-			if (this._codeEditor) {
-				const position = this._codeEditor.selection.active;
-				var newPosition = position.with(scene.startLine, 0);
-				var newSelection = new vscode.Selection(newPosition, newPosition);
-				this._codeEditor.selection = newSelection;
-			}
-		} else if (typeof scene === "string") {
-			const sceneItem = this._sceneTreeItems.find(item => item.label === scene);
-			if (sceneItem) {
-				this._setCursorPositionToScene(sceneItem);
-			}
-		}
-	}
-
-	private _getSceneTreeItemFromCursorPosition(): ManimOutlineTreeItem | undefined {
-		const position = this._codeEditor?.selection?.active;
-		if (!position) {
-			return undefined;
-		}
-		const lineIndex = position.line;
-		for (const item of this._sceneTreeItems) {
-			if (lineIndex >= item.startLine! && lineIndex < item.endLine!) {
-				return item;
-			}
-		}
-		return undefined;
-	}
-
-	private _updateTreeViewTitle() {
-		var view = this._getTreeView();
-		if (this._codeDocument) {
-			const codeFileName = path.basename(this._codeDocument.uri.fsPath);
-			view.title = 'Manim Outline: ' + codeFileName;
-		} else {
-			view.title = 'Manim Outline';
-		}
-	}
-
-	private _getQuality(): string {
-		const settings = vscode.workspace.getConfiguration('manimViewer');
-		const quality = settings?.get<string>('renderQuality');
-		return quality || '480p15';
-	}
-
-	private _onActiveTextEditorChanged() {
-		// console.log('editor changed');
-		const document = vscode.window.activeTextEditor?.document;
-		let isPythonFile = document && this._isValidCodeDocument(document);
-		let isManimViewer = ManimViewerPanel.currentPanel?.isActive();
-		vscode.commands.executeCommand('setContext', 'manimOutlineEnabled', isPythonFile || isManimViewer);
-		if (isPythonFile && (document !== this._codeDocument)) {
-			this._codeEditor = vscode.window.activeTextEditor;
-			this.setCodeDocument(document);
-		}
-	}
-
-	private _onTextDocumentSaved(document: vscode.TextDocument) {
-		if (document !== this._codeDocument) {
-			return;
-		}
-		this._isHandlingDocumentSave = true;
-		// Debounce the document save event
-		// to avoid also calling the document change event
-		clearTimeout(this._documentSaveTimeout);
-		this._documentSaveTimeout = setTimeout(() => this._handleTextDocumentSave(document), 100);
-	}
-
-	private _handleTextDocumentSave(document: vscode.TextDocument) {
-		// console.log('document saved');
-		this.refresh();
-		this._isHandlingDocumentSave = false;
-	}
-
-	private _onTextDocumentChanged(event: vscode.TextDocumentChangeEvent) {
-		if (this._isHandlingDocumentSave) {
-			return;
-		}
-		if (event.document !== this._codeDocument) {
-			return;
-		}
-		this._isHandlingDocumentChange = true;
-		// Debounce the document change event
-		// to avoid repeated calls during rapid typing
-		clearTimeout(this._documentChangeTimeout);
-		this._documentChangeTimeout = setTimeout(() => this._handleTextDocumentChange(event), 90);
-	}
-
-	private _handleTextDocumentChange(event: vscode.TextDocumentChangeEvent) {
-		if (this._isHandlingDocumentSave) {
-			this._isHandlingDocumentChange = false;
-			return;
-		}
-		// console.log('document changed');
-		for (const contentChange of event.contentChanges) {
-			let numPrevLines = contentChange.range.end.line - contentChange.range.start.line + 1;
-			let numNewLines = contentChange.text.split('\n').length;
-			if (numNewLines !== numPrevLines) {
-				// TODO: Smarter more efficient handling of line addition/deletion?
-				// For now, just refresh the outline view. Dumb, but works.
-				this.refresh();
-				break;
-			}
-		}
-		this._isHandlingDocumentChange = false;
-	}
-
-	private _onTextEditorSelectionChanged(event: vscode.TextEditorSelectionChangeEvent) {
-		if (this._isHandlingDocumentChange) {
-			return;
-		}
-		if (event.textEditor.document !== this._codeDocument) {
-			return;
-		}
-		this._isHandlingSelectionChange = true;
-		// Debounce the selection change event
-		// to avoid repeated calls during dragging selections or rapid typing
-		clearTimeout(this._selectionChangeTimeout);
-		this._selectionChangeTimeout = setTimeout(() => this._handleTextEditorSelectionChange(event), 80);
-	}
-
-	private _handleTextEditorSelectionChange(event: vscode.TextEditorSelectionChangeEvent) {
-		if (this._isHandlingDocumentChange) {
-			this._isHandlingSelectionChange = false;
-			return;
-		}
-		// console.log('selection changed');
-		const selection = event.selections[0];
-		const lineIndex = selection.active.line;
-		var sceneTreeItem: ManimOutlineTreeItem | undefined;
-		for (const item of this._sceneTreeItems) {
-			if (lineIndex >= item.startLine! && lineIndex < item.endLine!) {
-				sceneTreeItem = item;
-				break;
-			}
-		}
-		if (sceneTreeItem) {
-			this.setScene(sceneTreeItem);
-		} else {
-			// no way to clear the tree view selection as of now
-		}
-		this._isHandlingSelectionChange = false;
-	}
-	
-	private _onFileDeleted(event: vscode.FileDeleteEvent) {
-		// console.log('file deleted');
-		// Clear the outline view if the deleted file is the current document
-		if (this._codeDocument && event.files.includes(this._codeDocument.uri)) {
-			this._codeEditor = undefined;
-			this.setCodeDocument(undefined);
-		}
-	}
-
-	private _onFileRenamed(event: vscode.FileRenameEvent) {
-		// console.log('file renamed');
-		// Update the outline view title if the renamed file is the current document
-		if (event.files.some(file => file.oldUri === this._codeDocument?.uri)) {
-			this._updateTreeViewTitle();
-		}
-	}
-
-	private _parsePythonCodeForManimOutline(pythonCode: string): ManimOutlineTreeItem[] {
-		var data: ManimOutlineTreeItem[] = [];
-		let lines: string[] = pythonCode.split('\n');
-		var indentLevels: number[] = [];
-		var indentString: string = '';
-		var inClassBlock: boolean = false;
-		var inFunctionBlock: boolean = false;
-		var inSceneConstructMethod: boolean = false;
-		var isManim: boolean = false;
-		var classItem: ManimOutlineTreeItem | undefined;
-		var sectionNum: number = 0;
-		var topLevelCodeLines: string[] = [];
-		for (var i = 0; i < lines.length; i++) {
-			const line = lines[i];
-
-			const lineIndentString = line.substring(0, line.search(/\S/));
-			if (indentString === '' && lineIndentString !== '') {
-				indentString = lineIndentString;
-			}
-			let indentLevel = lineIndentString === '' ? 0 : lineIndentString.length / indentString.length;
-			indentLevels.push(indentLevel);
-
-			if (!inClassBlock && !inFunctionBlock && line.trim() !== '' && !line.startsWith('class ') && !line.startsWith('def ')) {
-				topLevelCodeLines.push(line);
-			}
-
-			if (isManim === false) {
-				if (line.startsWith('from manim import ')) {
-					isManim = true;
-					continue;
-				}
-			}
-
-			if (line.startsWith('class ')) {
-				inClassBlock = true;
-				inFunctionBlock = false;
-				inSceneConstructMethod = false;
-				// end previous class item
-				if (classItem !== undefined) {
-					classItem.endLine = i;
-					classItem = undefined;
-				}
-				// init new class item
-				const className = line.substring(6).split('(')[0].trim();
-				classItem = new ManimOutlineTreeItem(className, this._sceneIconPath);
-				classItem.startLine = i;
-			} else if (line.startsWith('def ')) {
-				inClassBlock = false;
-				inFunctionBlock = true;
-				inSceneConstructMethod = false;
-				// end previous class item
-				if (classItem !== undefined) {
-					classItem.endLine = i;
-					classItem = undefined;
-				}
-			} else if (inClassBlock && (indentLevel === 1) && (line.trim() === 'def construct(self):')) {
-				inFunctionBlock = true;
-				inSceneConstructMethod = true;
-				// should always have a class item here
-				data.push(classItem ? classItem : new ManimOutlineTreeItem(''));
-				sectionNum = 0;
-			} else if (inClassBlock && (indentLevel === 1) && line.trim().startsWith('def ')) {
-				inFunctionBlock = true;
-				inSceneConstructMethod = false;
-			// } else if (indentLevel === 2 && inSceneConstructMethod) {
-			// 	if (line.trim().startsWith('self.next_section(')) {
-			// 		var sectionName: string = sectionNum.toString().padStart(4, '0');
-			// 		const firstChar = line.indexOf('(') + 1;
-			// 		const lastChar = line.indexOf(')') - 1;
-			// 		const args = line.substring(firstChar, lastChar + 1).split(',');
-			// 		for (const [index, arg] of args.entries()) {
-			// 			if (arg.includes('=')) {
-			// 				const keyvalue = arg.split('=');
-			// 				const key = keyvalue[0].trim();
-			// 				if (key === 'name') {
-			// 					const value = keyvalue[1].trim();
-			// 					sectionName += ' ' + value.substring(1, value.length - 1);
-			// 					break;
-			// 				}
-			// 			} else if (index === 0) {
-			// 				sectionName += ' ' + arg.substring(1, arg.length - 1);
-			// 				break;
-			// 			}
-			// 		}
-			// 		// data[data.length - 1].children.push(new ManimOutlineTreeItem(sectionName, this._sectionIconPath));
-			// 		sectionNum++;
-			} else if (indentLevel === 0 && line.trim() !== '') {
-				inClassBlock = false;
-				inFunctionBlock = false;
-				inSceneConstructMethod = false;
-				// end previous class item
-				if (classItem !== undefined) {
-					classItem.endLine = i;
-					classItem = undefined;
-				}
-			}
-		}
-		if (!isManim) {
-			return [];
-		}
-		if (data.length > 0 && data[data.length - 1].endLine === undefined) {
-			data[data.length - 1].endLine = lines.length;
-		}
-		data.forEach(element => {
-			var codeLines: string[] = topLevelCodeLines.slice();
-			lines.slice(element.startLine, element.endLine).forEach(line => {
-				line = line.trimEnd();
-				if (line.trim() !== '') {
-					codeLines.push(line);
-				}
-			});
-			element.code = codeLines.join('\n');
-
-			if (element.children.length > 0) {
-				element.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
-			}
-			element.children.forEach(child => {
-				child.parent = element;
-			});
-		});
-		return data;
-	}
-
-	getTreeItem(element: ManimOutlineTreeItem): vscode.TreeItem {
-		return element;
-	}
-
-	getParent(element: ManimOutlineTreeItem): ManimOutlineTreeItem | null {
-		return element.parent;
-	}
-
-	getChildren(element?: ManimOutlineTreeItem | undefined): Thenable<ManimOutlineTreeItem[]> {
-		if (element === undefined) {
-			return Promise.resolve(this._sceneTreeItems);
-		}
-		return Promise.resolve(element.children);
-	}
+interface Scene {
+	name: string;
+	lineStart: number;
+	lineEnd: number;
+	code: string;
 }
 
-class ManimOutlineTreeItem extends vscode.TreeItem {
-
-	parent: ManimOutlineTreeItem | null = null;
-	children: ManimOutlineTreeItem[] = [];
-	startLine: number | undefined;
-	endLine: number | undefined;
-	code: string | undefined;
-
-	constructor(label: string, iconPath?: any) {
-		const collapsibleState = vscode.TreeItemCollapsibleState.None;
-		super(label, collapsibleState);
-		if (iconPath !== undefined) {
-			this.iconPath = iconPath;
-		}
-	}
-
-	command = {
-		command: "manimViewer.selectTreeItem",
-		title: "Select Scene/Section",
-		arguments: [this]
-	};
+interface RenderProcess {
+	terminal: vscode.Terminal | undefined;
+	codeUri: vscode.Uri;
+	scene: Scene;
+	quality: string;
+	videoUri: vscode.Uri;
 }
 
 class ManimViewerPanel {
@@ -745,60 +74,201 @@ class ManimViewerPanel {
 	private readonly _extensionUri: vscode.Uri;
 	private _disposables: vscode.Disposable[] = [];
 
+	// selected scene and associated video
+	private _codeEditor: vscode.TextEditor | undefined;
+	private _codeDocument: vscode.TextDocument | undefined;
+	private _scenes: Scene[] = [];
+	private _selectedScene: Scene | undefined;
 	private _videoUri: vscode.Uri | undefined;
-	private _terminal: vscode.Terminal | undefined;
+	private _videoStatus: string | undefined;
+	private _videoStatusIconUri: vscode.Uri | undefined;
+	private _autoSelectScene: boolean = true;
+	private _mainTerminal: vscode.Terminal | undefined;
+	private _mainRenderProcess: RenderProcess | undefined;
+	private _backgroundRenderProcesses: {[key: string]: RenderProcess} = {};
 
-	refresh(videoUri?: vscode.Uri | undefined) {
-		// update video file?
-		if (videoUri) {
-			this._videoUri = videoUri;
+	// for debouncing async events
+	private _documentChangeTimeout: NodeJS.Timeout | string | number | undefined;
+	private _selectionChangeTimeout: NodeJS.Timeout | string | number | undefined;
+
+	public refresh() {
+		const editor = this._codeEditor;
+		const document = this._codeDocument;
+		const scene = this._selectedScene;
+
+		// wait a tiny bit so that editor.selection.active is updated
+		setTimeout(() => this.setCodeDocument(document, editor, scene), 100);
+	}
+
+	public setCodeDocument(document: vscode.TextDocument | undefined, editor?: vscode.TextEditor | undefined, scene?: Scene | string | undefined) {
+		const isFile = document?.uri.scheme === 'file';
+		const isPython = document?.languageId === 'python';
+		if (!isFile || !isPython || !isExistingFile(document?.uri.fsPath)) {
+			return;
 		}
-		// update webview content
-		const webview = this._panel.webview;
-		this._panel.webview.html = this._getHtmlForWebview(webview);
+		this._codeEditor = editor;
+		this._codeDocument = document;
+		this._scenes = parsePythonCodeForManimOutline(this._codeDocument.getText());
+
+		scene = this._getScene(scene);
+		if (debugManimViewer) {
+			console.log('setCodeDocument: scene=', scene?.name);
+		}
+		if (scene === undefined) {
+			if (this._autoSelectScene) {
+				scene = this._getSceneUnderCursor();
+			} else {
+				scene = this._selectedScene;
+				if (scene === undefined) {
+					scene = this._getSceneUnderCursor();
+				}
+			}
+			if (debugManimViewer) {
+				console.log('try again: scene=', scene?.name);
+			}
+		}
+		this.setScene(scene);
+	}
+
+	public setScene(scene: Scene | string | undefined) {
+		this._selectedScene = this._getScene(scene);
+		if (debugManimViewer) {
+			console.log('setScene: scene=', this._selectedScene?.name);
+		}
+
+		this.updateVideo();
+	}
+
+	public updateVideo() {
+		this._videoUri = getVideoUri(this._codeDocument?.uri, this._selectedScene?.name);
+		if (debugManimViewer) {
+			console.log('updateVideo: path=', this._videoUri?.fsPath);
+		}
+
+		this.updateVideoStatus();
+	}
+
+	public updateVideoStatus() {
+		this._videoStatus = this._getVideoStatus();
+		if (debugManimViewer) {
+			console.log('updateVideoStatus: status=', this._videoStatus);
+		}
+		switch (this._videoStatus) {
+			case 'Video up-to-date with code':
+				this._videoStatusIconUri = vscode.Uri.joinPath(this._extensionUri, 'resources', 'dark', 'pass.svg');
+				break;
+			case 'Video out-of-date with code':
+			case 'Video match with code unknown':
+				this._videoStatusIconUri = vscode.Uri.joinPath(this._extensionUri, 'resources', 'dark', 'warning.svg');
+				break;
+			case 'Video does not exist':
+				this._videoStatusIconUri = vscode.Uri.joinPath(this._extensionUri, 'resources', 'dark', 'error.svg');
+				break;
+			default:
+				this._videoStatusIconUri = undefined;
+				break;
+		}
+
+		this._updatePanel();
+	}
+
+	public renderScene(scene: Scene | string | undefined, forceRender: boolean = false, renderInBackground: boolean = false) {
+		if (this._codeDocument === undefined) {
+			return;
+		}
+		scene = this._getScene(scene);
+		if (scene === undefined) {
+			return;
+		}
+		if (this._videoUri === undefined) {
+			this._videoUri = getVideoUri(this._codeDocument.uri, scene.name);
+			if (this._videoUri === undefined) {
+				return;
+			}
+		}
+		if (debugManimViewer) {
+			console.log('renderScene: scene=', scene.name, 'forceRender=', forceRender, 'renderInBackground=', renderInBackground);
+		}
+		if (!forceRender) {
+			var videoCodeCache = readVideoCodeCache(this._videoUri);
+			if (scene.name in videoCodeCache) {
+				if (videoCodeCache[scene.name] === scene.code) {
+					if (debugManimViewer) {
+						console.log('Video already up-to-date, don\'t render');
+					}
+					return;
+				}
+			}
+		}
+
+		// render scene in terminal
+		var renderProcess: RenderProcess = {
+			terminal: undefined,
+			codeUri: this._codeDocument.uri,
+			scene: scene,
+			quality: getQualitySetting(),
+			videoUri: this._videoUri,
+		};
+		if (renderInBackground) {
+			const videoFilePath = this._videoUri.fsPath;
+			if (videoFilePath in this._backgroundRenderProcesses) {
+				// this video is already being rendered
+				return;
+			}
+			// render in a background terminal
+			renderProcess.terminal = vscode.window.createTerminal(scene.name);
+			this._backgroundRenderProcesses[videoFilePath] = renderProcess;
+		} else {
+			if (this._mainRenderProcess !== undefined) {
+				// only one main render process at a time
+				return;
+			}
+			// render in the main terminal and show it without stealing focus
+			renderProcess.terminal = this.getMainTerminal();
+			renderProcess.terminal.show(true);
+			this._mainRenderProcess = renderProcess;
+		}
+		const codeFilePath = this._codeDocument.uri.fsPath;
+		const codeDir = path.dirname(codeFilePath);
+		const codeFileName = path.basename(codeFilePath);
+		const qualityFlag = getQualityFlag(renderProcess.quality) ?? 'l';
+		// TODO: use videoUri. For now, manim's default output path should be the same as the videoUri.
+		renderProcess.terminal.sendText(`cd ${codeDir}; manim --quality=${qualityFlag} ${codeFileName} ${scene.name}`);
+		if (debugManimViewer) {
+			console.log('Render command sent to terminal');
+		}
 	}
 
 	public isActive(): boolean {
 		return this._panel.active;
 	}
 
-	public getTerminal(): vscode.Terminal {
-		if (this._terminal) {
-			return this._terminal;
+	public getMainTerminal(): vscode.Terminal {
+		if (this._mainTerminal) {
+			return this._mainTerminal;
 		}
 
 		// Create the terminal
-		this._terminal = vscode.window.createTerminal('Manim Viewer');
-
-		// Update this panel whenever the terminal is done executing
-		vscode.window.onDidEndTerminalShellExecution(async (event) => {
-			if (event.terminal === this._terminal) {
-				this.refresh();
-			}
-		});
+		this._mainTerminal = vscode.window.createTerminal('Manim Viewer');
 
 		// Dispose if the terminal is closed
 		vscode.window.onDidCloseTerminal(async (event) => {
 			if (event.name === 'Manim Viewer') {
-				this._terminal = undefined;
+				this._mainTerminal = undefined;
 			}
 		});
 
-		return this._terminal;
+		return this._mainTerminal;
 	}
 
-	public clearTerminal() {
-		if (this._terminal) {
-			this._terminal.dispose();
-			this._terminal = undefined;
+	public closeMainTerminal() {
+		if (this._mainTerminal) {
+			this._mainTerminal.dispose();
+			this._mainTerminal = undefined;
 		}
 	}
 	
 	public static createOrShow(extensionUri: vscode.Uri) {
-		// const column = vscode.window.activeTextEditor
-		// 	? vscode.window.activeTextEditor.viewColumn
-		// 	: undefined;
-
 		// If we already have a panel, show it.
 		if (ManimViewerPanel.currentPanel) {
 			ManimViewerPanel.currentPanel._panel.reveal(vscode.ViewColumn.Beside);
@@ -812,7 +282,6 @@ class ManimViewerPanel {
 			vscode.ViewColumn.Beside,
 			getWebviewOptions(extensionUri),
 		);
-
 		ManimViewerPanel.currentPanel = new ManimViewerPanel(panel, extensionUri);
 	}
 
@@ -824,15 +293,58 @@ class ManimViewerPanel {
 		this._panel = panel;
 		this._extensionUri = extensionUri;
 
-		// Setup the terminal
-		this._terminal = this.getTerminal();
-
-		// Set the webview's initial html content
-		this.refresh();
+		// Set the webview html
+		const webview = this._panel.webview;
+		this._panel.webview.html = this._getHtmlForWebview(webview);
 
 		// Listen for when the panel is disposed
 		// This happens when the user closes the panel or when the panel is closed programmatically
 		this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
+
+		// Handle vscode events
+		vscode.window.onDidChangeActiveTextEditor((editor) => this._onActiveTextEditorChanged(editor));
+		vscode.workspace.onDidChangeTextDocument((event) => this._onTextDocumentChanged(event));
+		vscode.window.onDidChangeTextEditorSelection((event) => this._onTextEditorSelectionChanged(event));
+		vscode.workspace.onDidSaveTextDocument((document) => this._onTextDocumentSaved(document));
+		// vscode.workspace.onDidDeleteFiles((event) => this._onFileDeleted(event));
+		// vscode.workspace.onDidRenameFiles((event) => this._onFileRenamed(event));
+		vscode.window.onDidEndTerminalShellExecution(async (event) => this._onTerminalShellExecutionEnded(event));
+
+		// Handle messages from the webview
+		this._panel.webview.onDidReceiveMessage(
+			message => {
+				switch (message.command) {
+					case 'selectScene':
+						this.setScene(message.scene);
+						return;
+					case 'renderScene':
+						this.renderScene(message.scene, message.forceRender, message.renderInBackground);
+						return;
+					case 'autoSelectScene':
+						this._autoSelectScene = message.value;
+						if (debugManimViewer) {
+							console.log('autoSelectScene=', this._autoSelectScene);
+						}
+						if (this._autoSelectScene) {
+							setTimeout(() => {
+								const scene = this._getSceneUnderCursor();
+								if (scene && scene !== this._selectedScene) {
+									this.setScene(scene);
+								}
+							}, 50);
+						}
+						return;
+					case 'openSettings':
+						vscode.commands.executeCommand('manimViewer.openSettings');
+						return;
+				}
+			},
+			null,
+			this._disposables
+		);
+
+		// init webview for the active text editor
+		this._onActiveTextEditorChanged(vscode.window.activeTextEditor);
 	}
 
 	public dispose() {
@@ -840,8 +352,8 @@ class ManimViewerPanel {
 
 		// Clean up our resources
 		this._panel.dispose();
-		if (this._terminal) {
-			this._terminal.dispose();
+		if (this._mainTerminal) {
+			this._mainTerminal.dispose();
 		}
 
 		while (this._disposables.length) {
@@ -851,34 +363,48 @@ class ManimViewerPanel {
 			}
 		}
 	}
+	
+	private _updatePanel() {
+		if (debugManimViewer) {
+			console.log('_updatePanel');
+		}
+		const webview = this._panel.webview;
+		this._panel.webview.html = this._getHtmlForWebview(webview);
+	}
 
 	private _getHtmlForWebview(webview: vscode.Webview) {
-		// Local path to main script run in the webview
-		const scriptPathOnDisk = vscode.Uri.joinPath(this._extensionUri, 'media', 'main.js');
+		// file paths
+		const scriptUri = vscode.Uri.joinPath(this._extensionUri, 'media', 'main.js');
+		const styleResetUri = vscode.Uri.joinPath(this._extensionUri, 'media', 'reset.css');
+		const styleMainUri = vscode.Uri.joinPath(this._extensionUri, 'media', 'vscode.css');
+		const styleManimViewerUri = vscode.Uri.joinPath(this._extensionUri, 'media', 'manimViewer.css');
+		const refreshSvgUri = vscode.Uri.joinPath(this._extensionUri, 'resources', 'dark', 'refresh.svg');
+		const gearSvgUri = vscode.Uri.joinPath(this._extensionUri, 'resources', 'dark', 'gear.svg');
+		const codeUri = this._codeDocument?.uri;
 
-		// And the uri we use to load this script in the webview
-		const scriptUri = webview.asWebviewUri(scriptPathOnDisk);
+		// as webview paths
+		const scriptWebviewUri = webview.asWebviewUri(scriptUri);
+		const styleResetWebviewUri = webview.asWebviewUri(styleResetUri);
+		const styleMainWebviewUri = webview.asWebviewUri(styleMainUri);
+		const styleManimViewerWebviewUri = webview.asWebviewUri(styleManimViewerUri);
+		const refreshSvgWebviewUri = webview.asWebviewUri(refreshSvgUri);
+		const gearSvgWebviewUri = webview.asWebviewUri(gearSvgUri);
+		const videoWebviewUri = this._videoUri ? webview.asWebviewUri(this._videoUri) : undefined;
+		const videoStatusIconWebviewUri = this._videoStatusIconUri ? webview.asWebviewUri(this._videoStatusIconUri) : undefined;
 
-		// Local path to css styles
-		const styleResetPath = vscode.Uri.joinPath(this._extensionUri, 'media', 'reset.css');
-		const stylesPathMainPath = vscode.Uri.joinPath(this._extensionUri, 'media', 'vscode.css');
+		// file paths relative to workspace
+		const workspaceFolder = codeUri ? vscode.workspace.getWorkspaceFolder(codeUri) : undefined;
+		const codeRelFilePath = workspaceFolder && codeUri ? path.relative(workspaceFolder.uri.fsPath, codeUri.fsPath) : codeUri?.fsPath;
+		const videoRelFilePath = workspaceFolder && this._videoUri ? path.relative(workspaceFolder.uri.fsPath, this._videoUri.fsPath) : this._videoUri?.fsPath;
 
-		// Uri to load styles into webview
-		const stylesResetUri = webview.asWebviewUri(styleResetPath);
-		const stylesMainUri = webview.asWebviewUri(stylesPathMainPath);
+		// scene select html
+		var sceneOptions: string = '<option value="">-- Select Scene --</option>';
+		for (const scene of this._scenes) {
+			sceneOptions += `<option value="${scene.name}" ${this._selectedScene?.name === scene.name ? 'selected' : ''}>${scene.name}</option>`;
+		}
 
 		// Use a nonce to only allow specific scripts to be run
 		const nonce = getNonce();
-
-		// Video file uri and path relative to workspace root
-		const videoWebviewUri = this._videoUri ? webview.asWebviewUri(this._videoUri) : undefined;
-		var relVideoFilePath = this._videoUri?.fsPath;
-		if (this._videoUri) {
-			const workspaceFolder = vscode.workspace.getWorkspaceFolder(this._videoUri);
-			if (workspaceFolder) {
-				relVideoFilePath = path.relative(workspaceFolder.uri.fsPath, this._videoUri.fsPath);
-			}
-		}
 
 		return `<!DOCTYPE html>
 			<html lang="en">
@@ -893,20 +419,218 @@ class ManimViewerPanel {
 
 				<meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-				<link href="${stylesResetUri}" rel="stylesheet">
-				<link href="${stylesMainUri}" rel="stylesheet">
+				<link href="${styleResetWebviewUri}" rel="stylesheet">
+				<link href="${styleMainWebviewUri}" rel="stylesheet">
+				<link href="${styleManimViewerWebviewUri}" rel="stylesheet">
 
 				<title>Manim Viewer</title>
 			</head>
 			<body>
-				<span id="video-filepath">${relVideoFilePath || 'No video selected'}</span><br />
-				<video controls autoplay loop muted playsinline>
-					<source src="${videoWebviewUri || ''}" type="video/mp4">
+				<div id="video-filepath">
+					${videoRelFilePath ?? ''}
+				</div>
+
+				<video id="video-player" autoplay loop muted playsinline>
+					<source src="${videoWebviewUri ?? ''}" type="video/mp4">
 				</video>
 
-				<script nonce="${nonce}" src="${scriptUri}"></script>
+				<div id="video-status-wrapper">
+					<img id="video-status-icon" src="${videoStatusIconWebviewUri ?? ''}" />
+					<div id="video-status-text">
+						${this._videoStatus ?? ''}
+					</div>
+				</div>
+
+				<div id="code-filepath">
+					${codeRelFilePath ?? ''}
+				</div>
+
+				<div id="selected-scene-controls">
+					<select id="scene-select">
+						${sceneOptions}
+					</select>
+
+					<button id="render-button">
+						<img src="${refreshSvgWebviewUri ?? ''}" /> Render
+					</button>
+
+					<div id="auto-select-scene-wrapper">
+						<input type="checkbox" id="auto-select-scene-checkbox" ${this._autoSelectScene ? "checked" : ""} />
+						<div id="auto-select-scene-text">
+							Auto-Select Scene<br />Under Cursor
+						</div>
+					</div>
+
+					<button id="settings-button">
+						<img src="${gearSvgWebviewUri ?? ''}" />
+					</button>
+				</div>
+
+				<script nonce="${nonce}" src="${scriptWebviewUri}"></script>
 			</body>
 			</html>`;
+	}
+
+	private _onActiveTextEditorChanged(editor: vscode.TextEditor | undefined) {
+		if (debugManimViewer) {
+			console.log('_onActiveTextEditorChanged');
+		}
+		const document = editor?.document;
+		// wait a tiny bit so that editor.selection.active is updated
+		setTimeout(() => this.setCodeDocument(document, editor), 50);
+	}
+
+	private _onTextDocumentChanged(event: vscode.TextDocumentChangeEvent) {
+		if (event.document !== this._codeDocument) {
+			return;
+		}
+		// Debounce the selection change event
+		// to avoid repeated calls during dragging selections or rapid typing.
+		clearTimeout(this._documentChangeTimeout);
+		this._documentChangeTimeout = setTimeout(() => this._handleTextDocumentChange(event), 100);
+	}
+
+	private _handleTextDocumentChange(event: vscode.TextDocumentChangeEvent) {
+		if (debugManimViewer) {
+			console.log('_handleTextDocumentChange');
+		}
+		this.setCodeDocument(event.document, this._codeEditor);
+		this._documentChangeTimeout = undefined;
+	}
+
+	private _onTextEditorSelectionChanged(event: vscode.TextEditorSelectionChangeEvent) {
+		if (event.textEditor.document !== this._codeDocument) {
+			return;
+		}
+		if (!this._autoSelectScene) {
+			// we only care about this event if we are auto-selecting scenes under the cursor
+			return;
+		}
+		if (this._documentChangeTimeout) {
+			// don't handle selection change if a document change is pending
+			return;
+		}
+		// Debounce the selection change event
+		// to avoid repeated calls during dragging selections or rapid typing.
+		// The short wait also ensures that editor.selection.active is updated.
+		clearTimeout(this._selectionChangeTimeout);
+		this._selectionChangeTimeout = setTimeout(() => this._handleTextEditorSelectionChange(event), 150);
+	}
+
+	private _handleTextEditorSelectionChange(event: vscode.TextEditorSelectionChangeEvent) {
+		if (debugManimViewer) {
+			console.log('_handleTextEditorSelectionChange');
+		}
+		const selection = event.selections[0];
+		const cursorPosition = selection?.active;
+		if (cursorPosition) {
+			const scene = this._getSceneAtLine(cursorPosition.line);
+			if (scene && scene !== this._selectedScene) {
+				this.setScene(scene.name);
+			}
+		}
+		this._selectionChangeTimeout = undefined;
+	}
+
+	private _onTextDocumentSaved(document: vscode.TextDocument) {
+		if (document !== this._codeDocument) {
+			return;
+		}
+		// wait a tiny bit so that editor.selection.active is updated
+		setTimeout(() => this._handleTextDocumentSave(document), 200);
+	}
+
+	private _handleTextDocumentSave(document: vscode.TextDocument) {
+		if (debugManimViewer) {
+			console.log('_handleTextDocumentSave');
+		}
+		this.setCodeDocument(this._codeDocument, this._codeEditor, this._selectedScene);
+		if (getRenderOnSaveSetting()) {
+			const scene = this._selectedScene;
+			const forceRender = false;
+			const renderInBackground = false;
+			this.renderScene(scene, forceRender, renderInBackground);
+		}
+	}
+
+	private _onTerminalShellExecutionEnded(event: vscode.TerminalShellExecutionEndEvent) {
+		if (debugManimViewer) {
+			console.log('_onTerminalShellExecutionEnded: terminal=', event.terminal.name);
+		}
+		if (event.terminal === this._mainRenderProcess?.terminal) {
+			const renderProcess = this._mainRenderProcess;
+			if (debugManimViewer) {
+				console.log('Main render process ended');
+			}
+			updateVideoCodeCache(renderProcess.videoUri, renderProcess.scene.name, renderProcess.scene.code);
+			cleanUpPartialMovieFiles(renderProcess.videoUri, renderProcess.scene.name);
+			this.refresh();
+			this._mainRenderProcess = undefined;
+		} else  {
+			for (const videoFilePath in this._backgroundRenderProcesses) {
+				const renderProcess = this._backgroundRenderProcesses[videoFilePath];
+				if (event.terminal === renderProcess.terminal) {
+					if (debugManimViewer) {
+						console.log('Background render process ended');
+					}
+					updateVideoCodeCache(renderProcess.videoUri, renderProcess.scene.name, renderProcess.scene.code);
+					cleanUpPartialMovieFiles(renderProcess.videoUri, renderProcess.scene.name);
+					this._backgroundRenderProcesses[videoFilePath].terminal?.dispose();
+					delete this._backgroundRenderProcesses[videoFilePath];
+					break;
+				}
+			}
+		}
+	}
+
+	private _getScene(scene: Scene | string | undefined): Scene | undefined {
+		if (typeof scene === 'string') {
+			return this._scenes.find(s => s.name === scene);
+		}
+		return scene;
+	}
+	
+	private _getSceneUnderCursor(): Scene | undefined {
+		const cursorPosition = this._codeEditor?.selection?.active;
+		if (cursorPosition === undefined) {
+			return undefined;
+		}
+		return this._getSceneAtLine(cursorPosition?.line);
+	}
+
+	private _getSceneAtLine(lineIndex: number): Scene | undefined {
+		for (const scene of this._scenes) {
+			if (lineIndex >= scene.lineStart && lineIndex < scene.lineEnd) {
+				return scene;
+			}
+		}
+		return undefined;
+	}
+
+	private _getVideoStatus(): string | undefined {
+		if ((this._selectedScene === undefined) || (this._videoUri === undefined)) {
+			return undefined;
+		}
+		if (!isExistingFile(this._videoUri?.fsPath)) {
+			return 'Video does not exist';
+		}
+		const videoCodeCache = readVideoCodeCache(this._videoUri);
+		if (this._selectedScene.name in videoCodeCache) {
+			const cachedLines = videoCodeCache[this._selectedScene.name].split('\n');
+			const sceneLines = this._selectedScene.code.split('\n');
+			if (debugManimViewer) {
+				console.log('--- Cached code:');
+				console.log(cachedLines);
+				console.log('--- Scene code:');
+				console.log(sceneLines);
+			}
+			if (videoCodeCache[this._selectedScene.name] === this._selectedScene.code) {
+				return 'Video up-to-date with code';
+			} else {
+				return 'Video out-of-date with code';
+			}
+		}
+		return 'Video match with code unknown';
 	}
 }
 
@@ -916,7 +640,7 @@ function getWebviewOptions(extensionUri: vscode.Uri): vscode.WebviewOptions {
 		enableScripts: true,
 
 		// And restrict the webview to only loading content from our extension's `media` directory.
-		// localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'media')]
+		// localResourceRoots: [extensionUri] //[vscode.Uri.joinPath(extensionUri, 'media')]
 	};
 }
 
@@ -928,3 +652,870 @@ function getNonce() {
 	}
 	return text;
 }
+	
+function isExistingFileOrDirectory(path: fs.PathLike | undefined): boolean {
+	if (path === undefined) {
+		return false;
+	}
+	try {
+		fs.accessSync(path);
+		return true;
+	} catch (err) {
+		return false;
+	}
+}
+
+function isExistingFile(path: fs.PathLike | undefined): boolean {
+	if (path === undefined) {
+		return false;
+	}
+	try {
+	  return fs.statSync(path).isFile();
+	} catch (err) {
+	  return false;
+	}
+}
+
+function isExistingDirectory(path: fs.PathLike | undefined): boolean {
+	if (path === undefined) {
+		return false;
+	}
+	try {
+	  return fs.statSync(path).isDirectory();
+	} catch (err) {
+	  return false;
+	}
+}
+
+function parsePythonCodeForManimOutline(pythonCode: string): Scene[] {
+	var scenes: Scene[] = [];
+	var scene: Scene | undefined;
+	var isManim: boolean = false;
+	let lines: string[] = pythonCode.split('\n');
+	for (var i = 0; i < lines.length; i++) {
+		const line = lines[i];
+
+		if (isManim === false) {
+			if (line.startsWith('from manim import ')) {
+				isManim = true;
+				continue;
+			}
+		}
+
+		if (line.startsWith('class ') || line.startsWith('def ')) {
+			const lastScene = scenes.length > 0 ? scenes[scenes.length-1] : undefined;
+			if (lastScene && (lastScene.lineEnd === lastScene.lineStart)) {
+				scenes[scenes.length-1].lineEnd = i;
+				scenes[scenes.length-1].code = compressPythonCode(lines.slice(lastScene.lineStart, i));
+			}
+		}
+
+		if (line.startsWith('class ')) {
+			scene = {
+				name: line.substring(6).split('(')[0].trim(),
+				lineStart: i,
+				lineEnd: i,
+				code: '',
+			}
+		} else if (line.trim() === 'def construct(self):') {
+			if (scene && !scenes.includes(scene)) {
+				scenes.push(scene);
+			}
+		}
+	}
+
+	const lastScene = scenes.length > 0 ? scenes[scenes.length-1] : undefined;
+	if (lastScene && (lastScene.lineEnd === lastScene.lineStart)) {
+		scenes[scenes.length-1].lineEnd = lines.length;
+		scenes[scenes.length-1].code = compressPythonCode(lines.slice(lastScene.lineStart, lines.length));
+	}
+
+	// console.log(scenes);
+
+	if (!isManim) {
+		scenes = [];
+	}
+	return scenes;
+}
+
+function compressPythonCode(lines: string[]): string {
+	var compressedLines: string[] = [];
+	for (var line of lines) {
+		const pos = line.indexOf('#');
+		if (pos !== -1) {
+			line = line.substring(0, pos);
+		}
+		line = line.trimEnd();
+		if (line.trim() !== '') {
+			compressedLines.push(line);
+		}
+	}
+	return compressedLines.join('\n');
+}
+
+function getQualitySetting(): string {
+	const settings = vscode.workspace.getConfiguration('manimViewer');
+	const value = settings?.get<string>('renderQuality');
+	return value ?? '480p15';
+}
+
+function getQualityFlag(quality?: string): string | undefined {
+	if (quality === undefined) {
+		quality = getQualitySetting();
+	}
+	switch (quality) {
+		case '480p15':
+			return 'l';
+		case '720p30':
+			return 'm';
+		case '1080p60':
+			return 'h';
+		case '1440p60':
+			return 'p';
+		case '2160p60':
+			return 'k';
+		default:
+			return undefined;
+	}
+}
+
+function getRenderOnSaveSetting(): boolean {
+	const settings = vscode.workspace.getConfiguration('manimViewer');
+	const value = settings?.get<boolean>('renderOnSave');
+	return value ?? true;
+}
+
+function getVideoUri(codeUri: vscode.Uri | undefined, scene: string | undefined): vscode.Uri | undefined {
+	if (codeUri === undefined || scene === undefined) {
+		return undefined;
+	}
+	const codeFilePath = codeUri.fsPath;
+	const codeFileDir = path.dirname(codeFilePath);
+	const codeFileName = path.basename(codeFilePath, '.py');
+	const quality = getQualitySetting();
+	const videoFileDir = path.join(codeFileDir, 'media', 'videos', codeFileName, quality);
+	const videoFileName = scene + '.mp4';
+	const videoFilePath = path.join(videoFileDir, videoFileName);
+	return vscode.Uri.file(videoFilePath);
+}
+
+function getVideoCodeCacheUri(videoUri: vscode.Uri | undefined): vscode.Uri | undefined {
+	if (videoUri === undefined) {
+		return undefined;
+	}
+	const videoDir = path.dirname(videoUri.fsPath);
+	const videoCodeFilePath = path.join(videoDir, 'manimViewer.json');
+	return vscode.Uri.file(videoCodeFilePath);
+}
+
+function readVideoCodeCache(videoUri: vscode.Uri | undefined): {[key: string]: string} {
+	var videoCodeCache: {[key: string]: string} = {};
+	const videoCodeCacheUri = getVideoCodeCacheUri(videoUri);
+	if (isExistingFile(videoCodeCacheUri?.fsPath)) {
+		videoCodeCache = JSON.parse(fs.readFileSync(videoCodeCacheUri!.fsPath, 'utf8'));
+	}
+	return videoCodeCache;
+}
+
+function writeVideoCodeCache(videoUri: vscode.Uri | undefined, videoCodeCache: {[key: string]: string}) {
+	if (videoUri) {
+		const videoCodeCacheUri = getVideoCodeCacheUri(videoUri);
+		if (videoCodeCacheUri) {
+			fs.writeFileSync(videoCodeCacheUri.fsPath, JSON.stringify(videoCodeCache, null, 4));
+		}
+	}
+}
+
+function updateVideoCodeCache(videoUri: vscode.Uri | undefined, sceneName: string | undefined, code: string | undefined) {
+	if (videoUri === undefined || sceneName === undefined || code === undefined) {
+		return;
+	}
+	var videoCodeCache = readVideoCodeCache(videoUri);
+	videoCodeCache[sceneName] = code;
+	writeVideoCodeCache(videoUri, videoCodeCache);
+}
+
+function cleanUpPartialMovieFiles(videoUri: vscode.Uri, sceneName: string | undefined) {
+	const videoDir = path.dirname(videoUri.fsPath);
+	const partialMovieFilesDir = path.join(videoDir, 'partial_movie_files');
+	if (!isExistingDirectory(partialMovieFilesDir)) {
+		return;
+	}
+	const sceneDirNames = fs.readdirSync(partialMovieFilesDir);
+	// console.log(sceneDirNames);
+	for (const sceneDirName of sceneDirNames) {
+	  const sceneDir = path.join(partialMovieFilesDir, sceneDirName);
+	  const stat = fs.statSync(sceneDir);
+	  if (stat.isDirectory()) {
+		if (sceneName === undefined || sceneDirName === sceneName) {
+			var partialMovieFiles: string[] = [];
+			var listedPartialMovieFiles: string[] = [];
+			const sceneFileNames = fs.readdirSync(sceneDir);
+			// console.log(sceneFileNames);
+			for (const sceneFileName of sceneFileNames) {
+			  const sceneFilePath = path.join(sceneDir, sceneFileName);
+			  if (isExistingFile(sceneFilePath)) {
+				if (sceneFileName.endsWith('.mp4')) {
+				  partialMovieFiles.push(sceneFilePath);
+				} else if (sceneFileName === 'partial_movie_file_list.txt') {
+				  const data = fs.readFileSync(sceneFilePath, 'utf8');
+				  const lines = data.split('\n');
+				  for (const line of lines) {
+					if (line.startsWith('file ')) {
+						// file 'path/to/file.mp4'
+						const listedSceneFilePath = line.substring(6, line.length - 1).trim();
+						listedPartialMovieFiles.push(listedSceneFilePath);
+					}
+				  }
+				}
+			  }
+			}
+			// console.log(partialMovieFiles);
+			// console.log(listedPartialMovieFiles);
+			// delete partial movie files that are not listed in partial_movie_file_list.txt
+			for (const partialMovieFile of partialMovieFiles) {
+			  if (!listedPartialMovieFiles.includes(partialMovieFile)) {
+				fs.unlinkSync(partialMovieFile);
+			  }
+			}
+		}
+		if (sceneDirName === sceneName) {
+			break;
+		}
+	  }
+	}
+}
+
+// class ManimOutlineProvider implements vscode.TreeDataProvider<ManimOutlineTreeItem> {
+
+// 	public static readonly viewType = 'manimOutline';
+
+// 	private _onDidChangeTreeData: vscode.EventEmitter<ManimOutlineTreeItem | undefined | void> = new vscode.EventEmitter<ManimOutlineTreeItem | undefined | void>();
+// 	readonly onDidChangeTreeData: vscode.Event<ManimOutlineTreeItem | undefined | void> = this._onDidChangeTreeData.event;
+
+// 	private _codeEditor: vscode.TextEditor | undefined;
+// 	private _codeDocument: vscode.TextDocument | undefined;
+// 	private _sceneName: string | undefined;
+// 	private _videoUri: vscode.Uri | undefined;
+
+// 	private _sceneTreeItems: ManimOutlineTreeItem[] = [];
+// 	private _sceneIconPath: any = {
+// 		light: path.join(__filename, '..', '..', 'resources', 'light', 'symbol-interface.svg'),
+// 		dark: path.join(__filename, '..', '..', 'resources', 'dark', 'symbol-interface.svg')
+// 	};
+
+// 	// for debouncing async events
+// 	private _isHandlingDocumentSave: boolean = false;
+// 	private _isHandlingDocumentChange: boolean = false;
+// 	private _isHandlingSelectionChange: boolean = false;
+// 	private _documentSaveTimeout: NodeJS.Timeout | string | number | undefined;
+// 	private _documentChangeTimeout: NodeJS.Timeout | string | number | undefined;
+// 	private _selectionChangeTimeout: NodeJS.Timeout | string | number | undefined;
+
+// 	constructor(private context: vscode.ExtensionContext) {
+// 		vscode.window.onDidChangeActiveTextEditor(() => this._onActiveTextEditorChanged());
+// 		vscode.workspace.onDidSaveTextDocument((document) => this._onTextDocumentSaved(document));
+// 		vscode.workspace.onDidChangeTextDocument(event => this._onTextDocumentChanged(event));
+// 		vscode.window.onDidChangeTextEditorSelection((event) => this._onTextEditorSelectionChanged(event));
+// 		vscode.workspace.onDidDeleteFiles((event) => this._onFileDeleted(event));
+// 		vscode.workspace.onDidRenameFiles((event) => this._onFileRenamed(event));
+// 		// this.onDidChangeTreeData(() => this._onTreeDataChanged());
+
+// 		this._onActiveTextEditorChanged();
+// 	}
+
+// 	private _getTreeView(): vscode.TreeView<ManimOutlineTreeItem> {
+// 		return vscode.window.createTreeView(ManimOutlineProvider.viewType, { treeDataProvider: this });
+// 	}
+
+// 	refresh() {
+// 		// console.log('refresh');
+// 		this.setCodeDocument(this._codeDocument);
+// 	}
+
+// 	collapseAll() {
+// 		vscode.commands.executeCommand('workbench.actions.treeView.' + ManimOutlineProvider.viewType + '.collapseAll');
+// 	}
+
+// 	onTreeItemSelected(item: ManimOutlineTreeItem) {
+// 		this._setCursorPositionToScene(item);
+// 		this.setScene(item);
+// 	}
+
+// 	setCodeDocument(document: vscode.TextDocument | undefined) {
+// 		// console.log('set code document');
+// 		this._codeDocument = document;
+
+// 		// reset outline tree
+// 		const contents = this._codeDocument?.getText();
+// 		this._sceneTreeItems = contents ? this._parsePythonCodeForManimOutline(contents) : [];
+
+// 		let sceneTreeItem = this._getSceneTreeItemFromCursorPosition();
+// 		if (sceneTreeItem) {
+// 			this.setScene(sceneTreeItem);
+// 		} else {
+// 			// TODO: set scene based on stored state
+
+// 			// if not set based on stored state, clear the scene
+// 			this.setScene(undefined);
+// 		}
+
+// 		// update outline view title
+// 		this._updateTreeViewTitle();
+
+// 		// needed?
+// 		this._onDidChangeTreeData.fire();
+// 	}
+
+// 	setScene(scene: ManimOutlineTreeItem | string | undefined, forceRender: boolean = false) {
+// 		// console.log('set scene');
+// 		var sceneTreeItem: ManimOutlineTreeItem | undefined;
+// 		if (scene instanceof ManimOutlineTreeItem) {
+// 			sceneTreeItem = scene;
+// 			this._sceneName = sceneTreeItem.label?.toString();
+// 		} else {
+// 			this._sceneName = this._isValidSceneName(scene) ? scene : undefined;
+// 			sceneTreeItem = this._getSceneTreeItemFromName(this._sceneName);
+// 		}
+// 		// update tree selection
+// 		if (sceneTreeItem) {
+// 			this._getTreeView().reveal(sceneTreeItem, {select: true});
+// 		}
+// 		this._videoUri = this._getVideoUri();
+
+// 		if (ManimViewerPanel.currentPanel === undefined) {
+// 			return;
+// 		}
+// 		ManimViewerPanel.currentPanel.refresh(this._videoUri);
+
+// 		if (this._videoUri === undefined) {
+// 			return;
+// 		}
+// 		if (forceRender || !this._isExistingFile(this._videoUri?.fsPath)) {
+// 			this.renderScene();
+// 			return;
+// 		}
+// 		if (!this._isHandlingDocumentSave && (this._isHandlingDocumentChange || this._isHandlingSelectionChange)) {
+// 			return;
+// 		}
+// 		// check cached code to see if there is anything new to render
+// 		if (this._sceneName && sceneTreeItem) {
+// 			const videoCodeUri = this._getVideoCodeUri(this._videoUri);
+// 			if (videoCodeUri && this._isExistingFile(videoCodeUri.fsPath)) {
+// 				try {
+// 					const sceneCode = JSON.parse(fs.readFileSync(videoCodeUri.fsPath, 'utf8'));
+// 					const cachedSceneCode = sceneCode[this._sceneName];
+// 					const currentSceneCode = sceneTreeItem.code;
+// 					// console.log('Cached:\n' + cachedSceneCode);
+// 					// console.log('Current:\n' + currentSceneCode);
+// 					if (cachedSceneCode === currentSceneCode) {
+// 						// console.log('Scene code is already up to date');
+// 						return;
+// 					}
+// 				} catch (err) {
+// 				}
+// 			}
+// 		}
+// 		this.renderScene();
+// 	}
+
+// 	renderScene(sceneName?: string) {
+// 		if (ManimViewerPanel.currentPanel) {
+// 			const codeFilePath = this._codeDocument?.uri.fsPath;
+// 			if (sceneName === undefined) {
+// 				sceneName = this._sceneName;
+// 			}
+// 			if (codeFilePath && sceneName) {
+// 				// console.log('rendering scene');
+// 				const codeFileDir = path.dirname(codeFilePath);
+// 				const codeFileName = path.basename(codeFilePath);
+// 				const quality = this._getQuality();
+// 				const qualityFlags: { [key: string]: string } = {
+// 					"480p15": "l",
+// 					"720p30": "m",
+// 					"1080p60": "h",
+// 					"1440p60": "p",
+// 					"2160p60": "k"
+// 				};
+// 				const qualityFlag = qualityFlags[quality];
+// 				var videoFilePath = this._videoUri?.fsPath;
+// 				if (videoFilePath === undefined) {
+// 					const codeFileNameNoExt = path.basename(codeFilePath, '.py');
+// 					videoFilePath = path.join(codeFileDir, 'media', 'videos', codeFileNameNoExt, quality, sceneName + '.mp4');
+// 				}
+
+// 				const terminal: vscode.Terminal = ManimViewerPanel.currentPanel.getMainTerminal();
+// 				// TODO: use videoUri
+// 				// For now, manim's default output path should be the same as the videoUri.
+// 				terminal.sendText(`cd ${codeFileDir}; manim --quality=${qualityFlag} ${codeFileName} ${sceneName}`);
+
+// 				// store scene code for rendered video
+// 				const videoDir = path.dirname(videoFilePath);
+// 				const sceneCodeFilePath = path.join(videoDir, 'manimViewer.json');
+// 				var sceneCode: {[key: string]: any} = {}; // stupid typescript
+// 				if (this._isExistingFile(sceneCodeFilePath)) {
+// 					sceneCode = JSON.parse(fs.readFileSync(sceneCodeFilePath, 'utf8'));
+// 				}
+// 				// console.log(sceneCode);
+// 				const sceneTreeItem = this._sceneTreeItems.find(item => item.label === sceneName);
+// 				if (sceneTreeItem) {
+// 					sceneCode[sceneName] = sceneTreeItem.code;
+// 					fs.writeFileSync(sceneCodeFilePath, JSON.stringify(sceneCode, null, 4));
+// 				}
+
+// 				// clean up partial movie files
+// 				this._cleanUpPartialMovieFiles(videoDir, sceneName);
+// 			}
+// 		}
+// 	}
+
+// 	getCurrentSceneName(): string | undefined {
+// 		return this._sceneName;
+// 	}
+
+// 	private _getVideoUri(): vscode.Uri | undefined {
+// 		if (this._codeDocument === undefined || this._sceneName === undefined) {
+// 			return undefined;
+// 		}
+// 		const codeFilePath = this._codeDocument.uri.fsPath;
+// 		const codeFileDir = path.dirname(codeFilePath);
+// 		const codeFileName = path.basename(codeFilePath, '.py');
+// 		const quality = this._getQuality();
+// 		const videoFileDir = path.join(codeFileDir, 'media', 'videos', codeFileName, quality);
+// 		const videoFileName = this._sceneName + '.mp4';
+// 		const videoFilePath = path.join(videoFileDir, videoFileName);
+// 		return vscode.Uri.file(videoFilePath);
+// 	}
+
+// 	private _getVideoCodeUri(videoUri: vscode.Uri | undefined): vscode.Uri | undefined {
+// 		if (videoUri === undefined) {
+// 			return undefined;
+// 		}
+// 		const videoDir = path.dirname(videoUri.fsPath);
+// 		const videoCodeFilePath = path.join(videoDir, 'manimViewer.json');
+// 		return vscode.Uri.file(videoCodeFilePath);
+// 	}
+
+// 	private _cleanUpPartialMovieFiles(videoDir: string, sceneName: string | undefined) {
+// 		// console.log('clean up partial movie files');
+// 		let partialMovieFilesDir = path.join(videoDir, 'partial_movie_files');
+// 		// console.log(partialMovieFilesDir);
+// 		if (!this._isExistingDirectory(partialMovieFilesDir)) {
+// 			return;
+// 		}
+// 		const sceneDirNames = fs.readdirSync(partialMovieFilesDir);
+// 		// console.log(sceneDirNames);
+// 		for (const sceneDirName of sceneDirNames) {
+// 		  const sceneDir = path.join(partialMovieFilesDir, sceneDirName);
+// 		  const stat = fs.statSync(sceneDir);
+// 		  if (stat.isDirectory()) {
+// 			if (sceneName === undefined || sceneDirName === sceneName) {
+// 				var partialMovieFiles: string[] = [];
+// 				var listedPartialMovieFiles: string[] = [];
+// 				const sceneFileNames = fs.readdirSync(sceneDir);
+// 				// console.log(sceneFileNames);
+// 				for (const sceneFileName of sceneFileNames) {
+// 				  const sceneFilePath = path.join(sceneDir, sceneFileName);
+// 				  const stat = fs.statSync(sceneFilePath);
+// 				  if (stat.isFile()) {
+// 					if (sceneFileName.endsWith('.mp4')) {
+// 					  partialMovieFiles.push(sceneFilePath);
+// 					} else if (sceneFileName === 'partial_movie_file_list.txt') {
+// 					  const data = fs.readFileSync(sceneFilePath, 'utf8');
+// 					  const lines = data.split('\n');
+// 					  for (const line of lines) {
+// 						if (line.startsWith('file ')) {
+// 							// file 'path/to/file.mp4'
+// 							const listedSceneFilePath = line.substring(6, line.length - 1).trim();
+// 							listedPartialMovieFiles.push(listedSceneFilePath);
+// 						}
+// 					  }
+// 					}
+// 				  }
+// 				}
+// 				// console.log(partialMovieFiles);
+// 				// console.log(listedPartialMovieFiles);
+// 				// delete partial movie files that are not listed in partial_movie_file_list.txt
+// 				for (const partialMovieFile of partialMovieFiles) {
+// 				  if (!listedPartialMovieFiles.includes(partialMovieFile)) {
+// 					fs.unlinkSync(partialMovieFile);
+// 				  }
+// 				}
+// 			}
+// 			if (sceneDirName === sceneName) {
+// 				break;
+// 			}
+// 		  }
+// 		}
+// 	}
+	
+// 	private _isExistingFile(path: fs.PathLike | undefined): boolean {
+// 		if (path === undefined) {
+// 			return false;
+// 		}
+// 		try {
+// 			fs.accessSync(path);
+// 			return true;
+// 		} catch (err) {
+// 			return false;
+// 		}
+// 	}
+
+// 	private _isExistingDirectory(path: fs.PathLike | undefined): boolean {
+// 		if (path === undefined) {
+// 			return false;
+// 		}
+// 		try {
+// 		  return fs.statSync(path).isDirectory();
+// 		} catch (err) {
+// 		  return false;
+// 		}
+// 	  }
+
+// 	private _isValidCodeDocument(document: vscode.TextDocument): boolean {
+// 		const isFile = document.uri.scheme === 'file';
+// 		const isPython = document.languageId === 'python';
+// 		if (!isFile || !isPython) {
+// 			return false;
+// 		}
+// 		return this._isExistingFile(document.uri.fsPath);
+// 	}
+
+// 	private _isValidSceneName(sceneName: string | undefined): boolean {
+// 		if (sceneName === undefined) {
+// 			return false;
+// 		}
+// 		return this._sceneTreeItems.some(item => item.label === sceneName);
+// 	}
+
+// 	private _getSceneTreeItemFromName(sceneName: string | undefined): ManimOutlineTreeItem | undefined {
+// 		if (sceneName === undefined) {
+// 			return undefined;
+// 		}
+// 		return this._sceneTreeItems.find(item => item.label === sceneName);
+// 	}
+
+// 	private _setCursorPositionToScene(scene: ManimOutlineTreeItem | string | undefined) {
+// 		if (scene instanceof ManimOutlineTreeItem) {
+// 			if (this._codeEditor) {
+// 				const position = this._codeEditor.selection.active;
+// 				var newPosition = position.with(scene.startLine, 0);
+// 				var newSelection = new vscode.Selection(newPosition, newPosition);
+// 				this._codeEditor.selection = newSelection;
+// 			}
+// 		} else if (typeof scene === "string") {
+// 			const sceneItem = this._sceneTreeItems.find(item => item.label === scene);
+// 			if (sceneItem) {
+// 				this._setCursorPositionToScene(sceneItem);
+// 			}
+// 		}
+// 	}
+
+// 	private _getSceneTreeItemFromCursorPosition(): ManimOutlineTreeItem | undefined {
+// 		const position = this._codeEditor?.selection?.active;
+// 		if (!position) {
+// 			return undefined;
+// 		}
+// 		const lineIndex = position.line;
+// 		for (const item of this._sceneTreeItems) {
+// 			if (lineIndex >= item.startLine! && lineIndex < item.endLine!) {
+// 				return item;
+// 			}
+// 		}
+// 		return undefined;
+// 	}
+
+// 	private _updateTreeViewTitle() {
+// 		var view = this._getTreeView();
+// 		if (this._codeDocument) {
+// 			const codeFileName = path.basename(this._codeDocument.uri.fsPath);
+// 			view.title = 'Manim Outline: ' + codeFileName;
+// 		} else {
+// 			view.title = 'Manim Outline';
+// 		}
+// 	}
+
+// 	private _getQuality(): string {
+// 		const settings = vscode.workspace.getConfiguration('manimViewer');
+// 		const quality = settings?.get<string>('renderQuality');
+// 		return quality || '480p15';
+// 	}
+
+// 	private _onActiveTextEditorChanged() {
+// 		// console.log('editor changed');
+// 		const document = vscode.window.activeTextEditor?.document;
+// 		let isPythonFile = document && this._isValidCodeDocument(document);
+// 		let isManimViewer = ManimViewerPanel.currentPanel?.isActive();
+// 		let isExplorerView = vscode.workspace.getConfiguration('Files', null).get('exclude', null) === null;
+// 		vscode.commands.executeCommand('setContext', 'manimOutlineEnabled', isPythonFile || isManimViewer);
+// 		if (isPythonFile && (document !== this._codeDocument)) {
+// 			this._codeEditor = vscode.window.activeTextEditor;
+// 			this.setCodeDocument(document);
+// 		}
+// 	}
+
+// 	private _onTextDocumentSaved(document: vscode.TextDocument) {
+// 		if (document !== this._codeDocument) {
+// 			return;
+// 		}
+// 		this._isHandlingDocumentSave = true;
+// 		// Debounce the document save event
+// 		// to avoid also calling the document change event
+// 		clearTimeout(this._documentSaveTimeout);
+// 		this._documentSaveTimeout = setTimeout(() => this._handleTextDocumentSave(document), 100);
+// 	}
+
+// 	private _handleTextDocumentSave(document: vscode.TextDocument) {
+// 		// console.log('document saved');
+// 		this.refresh();
+// 		this._isHandlingDocumentSave = false;
+// 	}
+
+// 	private _onTextDocumentChanged(event: vscode.TextDocumentChangeEvent) {
+// 		if (this._isHandlingDocumentSave) {
+// 			return;
+// 		}
+// 		if (event.document !== this._codeDocument) {
+// 			return;
+// 		}
+// 		this._isHandlingDocumentChange = true;
+// 		// Debounce the document change event
+// 		// to avoid repeated calls during rapid typing
+// 		clearTimeout(this._documentChangeTimeout);
+// 		this._documentChangeTimeout = setTimeout(() => this._handleTextDocumentChange(event), 90);
+// 	}
+
+// 	private _handleTextDocumentChange(event: vscode.TextDocumentChangeEvent) {
+// 		if (this._isHandlingDocumentSave) {
+// 			this._isHandlingDocumentChange = false;
+// 			return;
+// 		}
+// 		// console.log('document changed');
+// 		for (const contentChange of event.contentChanges) {
+// 			let numPrevLines = contentChange.range.end.line - contentChange.range.start.line + 1;
+// 			let numNewLines = contentChange.text.split('\n').length;
+// 			if (numNewLines !== numPrevLines) {
+// 				// TODO: Smarter more efficient handling of line addition/deletion?
+// 				// For now, just refresh the outline view. Dumb, but works.
+// 				this.refresh();
+// 				break;
+// 			}
+// 		}
+// 		this._isHandlingDocumentChange = false;
+// 	}
+
+// 	private _onTextEditorSelectionChanged(event: vscode.TextEditorSelectionChangeEvent) {
+// 		if (this._isHandlingDocumentChange) {
+// 			return;
+// 		}
+// 		if (event.textEditor.document !== this._codeDocument) {
+// 			return;
+// 		}
+// 		this._isHandlingSelectionChange = true;
+// 		// Debounce the selection change event
+// 		// to avoid repeated calls during dragging selections or rapid typing
+// 		clearTimeout(this._selectionChangeTimeout);
+// 		this._selectionChangeTimeout = setTimeout(() => this._handleTextEditorSelectionChange(event), 80);
+// 	}
+
+// 	private _handleTextEditorSelectionChange(event: vscode.TextEditorSelectionChangeEvent) {
+// 		if (this._isHandlingDocumentChange) {
+// 			this._isHandlingSelectionChange = false;
+// 			return;
+// 		}
+// 		// console.log('selection changed');
+// 		const selection = event.selections[0];
+// 		const lineIndex = selection.active.line;
+// 		var sceneTreeItem: ManimOutlineTreeItem | undefined;
+// 		for (const item of this._sceneTreeItems) {
+// 			if (lineIndex >= item.startLine! && lineIndex < item.endLine!) {
+// 				sceneTreeItem = item;
+// 				break;
+// 			}
+// 		}
+// 		if (sceneTreeItem) {
+// 			this.setScene(sceneTreeItem);
+// 		} else {
+// 			// no way to clear the tree view selection as of now
+// 		}
+// 		this._isHandlingSelectionChange = false;
+// 	}
+	
+// 	private _onFileDeleted(event: vscode.FileDeleteEvent) {
+// 		// console.log('file deleted');
+// 		// Clear the outline view if the deleted file is the current document
+// 		if (this._codeDocument && event.files.includes(this._codeDocument.uri)) {
+// 			this._codeEditor = undefined;
+// 			this.setCodeDocument(undefined);
+// 		}
+// 	}
+
+// 	private _onFileRenamed(event: vscode.FileRenameEvent) {
+// 		// console.log('file renamed');
+// 		// Update the outline view title if the renamed file is the current document
+// 		if (event.files.some(file => file.oldUri === this._codeDocument?.uri)) {
+// 			this._updateTreeViewTitle();
+// 		}
+// 	}
+
+// 	private _parsePythonCodeForManimOutline(pythonCode: string): ManimOutlineTreeItem[] {
+// 		var data: ManimOutlineTreeItem[] = [];
+// 		let lines: string[] = pythonCode.split('\n');
+// 		var indentLevels: number[] = [];
+// 		var indentString: string = '';
+// 		var inClassBlock: boolean = false;
+// 		var inFunctionBlock: boolean = false;
+// 		var inSceneConstructMethod: boolean = false;
+// 		var isManim: boolean = false;
+// 		var classItem: ManimOutlineTreeItem | undefined;
+// 		var sectionNum: number = 0;
+// 		var topLevelCodeLines: string[] = [];
+// 		for (var i = 0; i < lines.length; i++) {
+// 			const line = lines[i];
+
+// 			const lineIndentString = line.substring(0, line.search(/\S/));
+// 			if (indentString === '' && lineIndentString !== '') {
+// 				indentString = lineIndentString;
+// 			}
+// 			let indentLevel = lineIndentString === '' ? 0 : lineIndentString.length / indentString.length;
+// 			indentLevels.push(indentLevel);
+
+// 			if (!inClassBlock && !inFunctionBlock && line.trim() !== '' && !line.startsWith('class ') && !line.startsWith('def ')) {
+// 				topLevelCodeLines.push(line);
+// 			}
+
+// 			if (isManim === false) {
+// 				if (line.startsWith('from manim import ')) {
+// 					isManim = true;
+// 					continue;
+// 				}
+// 			}
+
+// 			if (line.startsWith('class ')) {
+// 				inClassBlock = true;
+// 				inFunctionBlock = false;
+// 				inSceneConstructMethod = false;
+// 				// end previous class item
+// 				if (classItem !== undefined) {
+// 					classItem.endLine = i;
+// 					classItem = undefined;
+// 				}
+// 				// init new class item
+// 				const className = line.substring(6).split('(')[0].trim();
+// 				classItem = new ManimOutlineTreeItem(className, this._sceneIconPath);
+// 				classItem.startLine = i;
+// 			} else if (line.startsWith('def ')) {
+// 				inClassBlock = false;
+// 				inFunctionBlock = true;
+// 				inSceneConstructMethod = false;
+// 				// end previous class item
+// 				if (classItem !== undefined) {
+// 					classItem.endLine = i;
+// 					classItem = undefined;
+// 				}
+// 			} else if (inClassBlock && (indentLevel === 1) && (line.trim() === 'def construct(self):')) {
+// 				inFunctionBlock = true;
+// 				inSceneConstructMethod = true;
+// 				// should always have a class item here
+// 				data.push(classItem ? classItem : new ManimOutlineTreeItem(''));
+// 				sectionNum = 0;
+// 			} else if (inClassBlock && (indentLevel === 1) && line.trim().startsWith('def ')) {
+// 				inFunctionBlock = true;
+// 				inSceneConstructMethod = false;
+// 			// } else if (indentLevel === 2 && inSceneConstructMethod) {
+// 			// 	if (line.trim().startsWith('self.next_section(')) {
+// 			// 		var sectionName: string = sectionNum.toString().padStart(4, '0');
+// 			// 		const firstChar = line.indexOf('(') + 1;
+// 			// 		const lastChar = line.indexOf(')') - 1;
+// 			// 		const args = line.substring(firstChar, lastChar + 1).split(',');
+// 			// 		for (const [index, arg] of args.entries()) {
+// 			// 			if (arg.includes('=')) {
+// 			// 				const keyvalue = arg.split('=');
+// 			// 				const key = keyvalue[0].trim();
+// 			// 				if (key === 'name') {
+// 			// 					const value = keyvalue[1].trim();
+// 			// 					sectionName += ' ' + value.substring(1, value.length - 1);
+// 			// 					break;
+// 			// 				}
+// 			// 			} else if (index === 0) {
+// 			// 				sectionName += ' ' + arg.substring(1, arg.length - 1);
+// 			// 				break;
+// 			// 			}
+// 			// 		}
+// 			// 		// data[data.length - 1].children.push(new ManimOutlineTreeItem(sectionName, this._sectionIconPath));
+// 			// 		sectionNum++;
+// 			} else if (indentLevel === 0 && line.trim() !== '') {
+// 				inClassBlock = false;
+// 				inFunctionBlock = false;
+// 				inSceneConstructMethod = false;
+// 				// end previous class item
+// 				if (classItem !== undefined) {
+// 					classItem.endLine = i;
+// 					classItem = undefined;
+// 				}
+// 			}
+// 		}
+// 		if (!isManim) {
+// 			return [];
+// 		}
+// 		if (data.length > 0 && data[data.length - 1].endLine === undefined) {
+// 			data[data.length - 1].endLine = lines.length;
+// 		}
+// 		data.forEach(element => {
+// 			var codeLines: string[] = topLevelCodeLines.slice();
+// 			lines.slice(element.startLine, element.endLine).forEach(line => {
+// 				line = line.trimEnd();
+// 				if (line.trim() !== '') {
+// 					codeLines.push(line);
+// 				}
+// 			});
+// 			element.code = codeLines.join('\n');
+
+// 			if (element.children.length > 0) {
+// 				element.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
+// 			}
+// 			element.children.forEach(child => {
+// 				child.parent = element;
+// 			});
+// 		});
+// 		return data;
+// 	}
+
+// 	getTreeItem(element: ManimOutlineTreeItem): vscode.TreeItem {
+// 		return element;
+// 	}
+
+// 	getParent(element: ManimOutlineTreeItem): ManimOutlineTreeItem | null {
+// 		return element.parent;
+// 	}
+
+// 	getChildren(element?: ManimOutlineTreeItem | undefined): Thenable<ManimOutlineTreeItem[]> {
+// 		if (element === undefined) {
+// 			return Promise.resolve(this._sceneTreeItems);
+// 		}
+// 		return Promise.resolve(element.children);
+// 	}
+// }
+
+// class ManimOutlineTreeItem extends vscode.TreeItem {
+
+// 	parent: ManimOutlineTreeItem | null = null;
+// 	children: ManimOutlineTreeItem[] = [];
+// 	startLine: number | undefined;
+// 	endLine: number | undefined;
+// 	code: string | undefined;
+
+// 	constructor(label: string, iconPath?: any) {
+// 		const collapsibleState = vscode.TreeItemCollapsibleState.None;
+// 		super(label, collapsibleState);
+// 		if (iconPath !== undefined) {
+// 			this.iconPath = iconPath;
+// 		}
+// 	}
+
+// 	command = {
+// 		command: "manimViewer.selectTreeItem",
+// 		title: "Select Scene/Section",
+// 		arguments: [this]
+// 	};
+// }

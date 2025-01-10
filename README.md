@@ -1,22 +1,26 @@
-# manim-viewer
+# Manim Viewer
+Live view for Manim scenes in Visual Studio Code.
 
-Live view for cursor-selected Manim scenes in Visual Studio Code.
+**!!! Major improvements since v1.x** (see CHANGELOG)
 
-## Features/Quickstart
+## Features
+- Simple and intuitive scene selection and rendering via a custom webview panel.
+- Optionally auto-load video for scene under cursor.
+- Only render when code has changed. This involves caching scene code in a `manimViewer.json` file alongside the video file.
+- Live report of video status with respect to current code (e.g., up-to-date or not).
+- Automatically cleans up any outdated partial video files for you.
 
-Always preview the scene you are working on in the code editor without having to click through any menus to select it!
-
+## Quickstart
 1. Ensure your active Python interpreter has manim installed on its path.
-2. Open a python file to activate the Manim Outline view under the file explorer view.
-3. Click the video icon in the Manim Outline view to open the viewer tab alongside the code editor.
-4. Then just click on a scene in the code editor (or Manim Outline view) to view it live in the viewer tab.
-5. After editing a scene's code, save the code file to update the viewer with a freshly rendered video.
+2. Open a python file to activate the extension.
+3. Click the video icon in the upper right editor toolbar to open the Manim Viewer webview panel.
+4. Scene selection and rendering using the Manim Viewer panel should be self-evident.
+5. By default, saving the code file will re-render the selected scene video (but only if the code has changed).
+6. Click the settings button in the Manim Viewer panel to customize its behavior (currently just render quality and whether to re-render on save).
 
-![screenshot](images/screenshot.png)
+![screenshot](images/screenshot-button.png)
 
-- Only render when needed. Manim-viewer is smart enough not to re-render scene's whose code has not changed. To do this the code for each rendered scene is cached in a `manimViewer.json` file alongside the video file. Upon recieving a render request, manim-viewer only renders the scene if a video at the designated path does not yet exist or if the scene's code has changed (non-indent whitespace is ignored) with respect to the cached code.
-- The render quality can be set in the extension settings (gear icon in Manim Outline view).
-- Finally, manim-viewer automatically cleans up any outdated partial video files for you.
+![screenshot](images/screenshot-webview.png)
 
 ## Requirements
 
@@ -27,7 +31,8 @@ Always preview the scene you are working on in the code editor without having to
 
 This extension contributes the following settings:
 
-* `manimViewer.renderQuality`: Choose Manim's render quality.
+- `manimViewer.renderQuality`: Choose Manim's render quality.
+- `manimViewer.renderOnSave`: Auto-render on file save.
 
 ## Support
 
@@ -38,7 +43,12 @@ This is all done in my free time. If you find it useful, why not buy me a cup of
 ## Release Notes
 
 ### 1.0.0
-
 Initial release of manim-viewer.
+
+### 2.0.0
+Major changes and improvements! See CHANGELOG for details.
+
+## Dev Notes
+To generate a `.vsix` file run `vsce package`
 
 ---
