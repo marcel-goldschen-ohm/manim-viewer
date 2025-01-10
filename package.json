@@ -2,7 +2,7 @@
   "name": "manim-viewer",
   "displayName": "Manim Viewer",
   "description": "Live preview for manim scenes",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "publisher": "marcel-goldschen-ohm",
   "repository": {
     "url": "https://github.com/marcel-goldschen-ohm/manim-viewer",

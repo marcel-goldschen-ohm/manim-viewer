@@ -100,6 +100,16 @@ class ManimViewerPanel {
 		setTimeout(() => this.setCodeDocument(document, editor, scene), 100);
 	}
 
+	public clear() {
+		this._codeEditor = undefined;
+		this._codeDocument = undefined;
+		this._scenes = [];
+		this._selectedScene = undefined;
+		this._videoUri = undefined;
+		this._videoStatus = undefined;
+		this._updatePanel();
+	}
+
 	public setCodeDocument(document: vscode.TextDocument | undefined, editor?: vscode.TextEditor | undefined, scene?: Scene | string | undefined) {
 		const isFile = document?.uri.scheme === 'file';
 		const isPython = document?.languageId === 'python';
@@ -233,7 +243,7 @@ class ManimViewerPanel {
 		const codeFileName = path.basename(codeFilePath);
 		const qualityFlag = getQualityFlag(renderProcess.quality) ?? 'l';
 		// TODO: use videoUri. For now, manim's default output path should be the same as the videoUri.
-		renderProcess.terminal.sendText(`cd ${codeDir}; manim --quality=${qualityFlag} ${codeFileName} ${scene.name}`);
+		renderProcess.terminal.sendText(`cd "${codeDir}"; manim --quality=${qualityFlag} "${codeFileName}" ${scene.name}`);
 		if (debugManimViewer) {
 			console.log('Render command sent to terminal');
 		}
@@ -306,8 +316,8 @@ class ManimViewerPanel {
 		vscode.workspace.onDidChangeTextDocument((event) => this._onTextDocumentChanged(event));
 		vscode.window.onDidChangeTextEditorSelection((event) => this._onTextEditorSelectionChanged(event));
 		vscode.workspace.onDidSaveTextDocument((document) => this._onTextDocumentSaved(document));
-		// vscode.workspace.onDidDeleteFiles((event) => this._onFileDeleted(event));
-		// vscode.workspace.onDidRenameFiles((event) => this._onFileRenamed(event));
+		vscode.workspace.onDidDeleteFiles((event) => this._onFileDeleted(event));
+		vscode.workspace.onDidRenameFiles((event) => this._onFileRenamed(event));
 		vscode.window.onDidEndTerminalShellExecution(async (event) => this._onTerminalShellExecutionEnded(event));
 
 		// Handle messages from the webview
@@ -450,7 +460,7 @@ class ManimViewerPanel {
 						${sceneOptions}
 					</select>
 
-					<button id="render-button">
+					<button id="render-button" title="Render the current scene">
 						<img src="${refreshSvgWebviewUri ?? ''}" /> Render
 					</button>
 
@@ -461,7 +471,7 @@ class ManimViewerPanel {
 						</div>
 					</div>
 
-					<button id="settings-button">
+					<button id="settings-button" title="Open extension settings">
 						<img src="${gearSvgWebviewUri ?? ''}" />
 					</button>
 				</div>
@@ -550,6 +560,31 @@ class ManimViewerPanel {
 			const forceRender = false;
 			const renderInBackground = false;
 			this.renderScene(scene, forceRender, renderInBackground);
+		}
+	}
+	
+	private _onFileDeleted(event: vscode.FileDeleteEvent) {
+		if (debugManimViewer) {
+			console.log('_onFileDeleted');
+		}
+		if (this._codeDocument && event.files.includes(this._codeDocument.uri)) {
+			if (debugManimViewer) {
+				console.log('Clearing the panel and resetting to active text editor');
+			}
+			this.clear();
+			setTimeout(() => this._onActiveTextEditorChanged(vscode.window.activeTextEditor), 200);
+		}
+	}
+
+	private _onFileRenamed(event: vscode.FileRenameEvent) {
+		if (debugManimViewer) {
+			console.log('_onFileRenamed');
+		}
+		if (event.files.some(file => file.oldUri === this._codeDocument?.uri)) {
+			if (debugManimViewer) {
+				console.log('Reset to active text editor');
+			}
+			setTimeout(() => this._onActiveTextEditorChanged(vscode.window.activeTextEditor), 200);
 		}
 	}
 

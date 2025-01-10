@@ -1,7 +1,7 @@
 # Manim Viewer
 Live view for Manim scenes in Visual Studio Code.
 
-**!!! Major improvements since v1.x** (see CHANGELOG)
+**!!! Major changes and improvements over v1.0.3 !!!** (see CHANGELOG)
 
 ## Features
 - Simple and intuitive scene selection and rendering via a custom webview panel.
@@ -46,7 +46,11 @@ This is all done in my free time. If you find it useful, why not buy me a cup of
 Initial release of manim-viewer.
 
 ### 2.0.0
-Major changes and improvements! See CHANGELOG for details.
+Major changes and improvements over v1.0.3! See CHANGELOG for details.
+
+## TODO
+- Handle file deletion and file renaming events.
+- Allow user specification of the output video filepath.
 
 ## Dev Notes
 To generate a `.vsix` file run `vsce package`
