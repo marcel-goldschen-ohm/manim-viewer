@@ -49,7 +49,6 @@ Initial release of manim-viewer.
 Major changes and improvements over v1.0.3! See CHANGELOG for details.
 
 ## TODO
-- Handle file deletion and file renaming events.
 - Allow user specification of the output video filepath.
 
 ## Dev Notes
