@@ -13,6 +13,7 @@
     "name": "Marcel Goldschen-Ohm",
     "url": "https://github.com/marcel-goldschen-ohm"
   },
+  "icon": "images/manim-viewer-logo.png",
   "license": "MIT",
   "engines": {
     "vscode": "^1.95.0"
